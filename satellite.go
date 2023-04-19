@@ -12,7 +12,6 @@ import (
 	"go.sia.tech/core/types"
 	"go.sia.tech/jape"
 	"go.sia.tech/renterd/api"
-	"go.sia.tech/renterd/internal/tracing"
 
 	"go.uber.org/zap"
 )
@@ -65,8 +64,6 @@ func New(bc busClient, ss jsonStore, l *zap.Logger) (*Satellite, error) {
 		store:  ss,
 		logger: l.Sugar().Named("satellite"),
 	}
-	_, span := tracing.Tracer.Start(context.Background(), "satellite.New")
-	defer span.End()
 
 	// Save the satellite config.
 	if cfg.Enabled {
@@ -141,7 +138,7 @@ func (s *Satellite) contractsHandlerDELETE(jc jape.Context) {
 
 // Handler returns an HTTP handler that serves the satellite API.
 func (s *Satellite) Handler() http.Handler {
-	return jape.Mux(tracing.TracedRoutes("satellite", map[string]jape.Handler{
+	return jape.Mux(map[string]jape.Handler{
 		"GET    /request":      s.requestContractsHandler,
 		"POST   /form":         s.formContractsHandler,
 		"POST   /renew":        s.renewContractsHandler,
@@ -153,7 +150,7 @@ func (s *Satellite) Handler() http.Handler {
 		"GET    /contract/:id": s.contractHandlerGET,
 		"GET    /contracts":    s.contractsHandlerGET,
 		"DELETE /contracts":    s.contractsHandlerDELETE,
-	}))
+	})
 }
 
 // parseEnvVar checks if the env variable is set and reads it.
