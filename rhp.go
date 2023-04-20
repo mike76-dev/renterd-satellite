@@ -110,9 +110,11 @@ func generateKeyPair(seed []byte) (types.PublicKey, types.PrivateKey) {
 func (s *Satellite) requestContractsHandler(jc jape.Context) {
 	cfg := s.store.getConfig()
 	if !cfg.Enabled {
+		s.logger.Error("couldn't request contracts: satellite disabled")
 		jc.Check("ERROR", errors.New("satellite disabled"))
 		return
 	}
+	s.logger.Info("requesting contracts from the satellite")
 	ctx := jc.Request.Context()
 
 	pk, sk := generateKeyPair(cfg.RenterSeed)
@@ -139,6 +141,7 @@ func (s *Satellite) requestContractsHandler(jc jape.Context) {
 	})
 
 	if jc.Check("couldn't request contracts", err) != nil {
+		s.logger.Error(fmt.Sprintf("couldn't request contracts: %s", err))
 		return
 	}
 	
@@ -165,6 +168,7 @@ func (s *Satellite) requestContractsHandler(jc jape.Context) {
 			a, err = s.bus.AddRenewedContract(ctx, ec.contract, ec.totalCost, ec.startHeight, ec.renewedFrom, cfg.PublicKey)
 		}
 		if jc.Check("couldn't add contract", err) != nil {
+			s.logger.Error(fmt.Sprintf("couldn't add requested contract: %s", err))
 			return
 		}
 		added = append(added, a)
@@ -179,14 +183,17 @@ func (s *Satellite) requestContractsHandler(jc jape.Context) {
 	}
 	err = s.bus.RecordContractSpending(ctx, recs)
 	if jc.Check("couldn't update contract spendings", err) != nil {
+		s.logger.Error(fmt.Sprintf("couldn't update contract spendings: %s", err))
 		return
 	}
 
 	err = s.bus.SetContractSet(ctx, "autopilot", contracts)
 	if jc.Check("couldn't set contract set", err) != nil {
+		s.logger.Error(fmt.Sprintf("couldn't set contract set: %s", err))
 		return
 	}
 
+	s.logger.Info(fmt.Sprintf("successfully added %v new contracts", len(added)))
 	jc.Encode(added)
 }
 
@@ -194,6 +201,7 @@ func (s *Satellite) requestContractsHandler(jc jape.Context) {
 func (s *Satellite) formContractsHandler(jc jape.Context) {
 	cfg := s.store.getConfig()
 	if !cfg.Enabled {
+		s.logger.Error("couldn't form contracts: satellite disabled")
 		jc.Check("ERROR", errors.New("satellite disabled"))
 		return
 	}
@@ -233,6 +241,8 @@ func (s *Satellite) formContractsHandler(jc jape.Context) {
 		BlockHeightLeeway:    uint64(gp.GougingSettings.HostBlockHeightLeeway),
 	}
 
+	s.logger.Info(fmt.Sprintf("trying to form %v contracts", fr.Hosts))
+
 	h := types.NewHasher()
 	fr.EncodeToWithoutSignature(h.E)
 	fr.Signature = sk.SignHash(h.Sum())
@@ -251,6 +261,7 @@ func (s *Satellite) formContractsHandler(jc jape.Context) {
 	})
 
 	if jc.Check("couldn't form contracts", err) != nil {
+		s.logger.Error(fmt.Sprintf("couldn't form contracts: %s", err))
 		return
 	}
 	
@@ -267,15 +278,18 @@ func (s *Satellite) formContractsHandler(jc jape.Context) {
 		contracts = append(contracts, id)
 		a, err := s.bus.AddContract(ctx, ec.contract, ec.totalCost, ec.startHeight, cfg.PublicKey)
 		if jc.Check("couldn't add contract", err) != nil {
+			s.logger.Error(fmt.Sprintf("couldn't add contract: %s", err))
 			return
 		}
 		added = append(added, a)
 	}
 	err = s.bus.SetContractSet(ctx, "autopilot", contracts)
 	if jc.Check("couldn't set contract set", err) != nil {
+		s.logger.Error(fmt.Sprintf("couldn't set contract set: %s", err))
 		return
 	}
 
+	s.logger.Info(fmt.Sprintf("successfully added %v new contracts", len(added)))
 	jc.Encode(added)
 }
 
@@ -283,6 +297,7 @@ func (s *Satellite) formContractsHandler(jc jape.Context) {
 func (s *Satellite) renewContractsHandler(jc jape.Context) {
 	cfg := s.store.getConfig()
 	if !cfg.Enabled {
+		s.logger.Error("couldn't renew contracts: satellite disabled")
 		jc.Check("ERROR", errors.New("satellite disabled"))
 		return
 	}
@@ -331,6 +346,8 @@ func (s *Satellite) renewContractsHandler(jc jape.Context) {
 		BlockHeightLeeway:    uint64(gp.GougingSettings.HostBlockHeightLeeway),
 	}
 
+	s.logger.Info(fmt.Sprintf("trying to renew %v contracts", len(rr.Contracts)))
+
 	h := types.NewHasher()
 	rr.EncodeToWithoutSignature(h.E)
 	rr.Signature = sk.SignHash(h.Sum())
@@ -349,6 +366,7 @@ func (s *Satellite) renewContractsHandler(jc jape.Context) {
 	})
 
 	if jc.Check("couldn't renew contracts", err) != nil {
+		s.logger.Error(fmt.Sprintf("couldn't renew contracts: %s", err))
 		return
 	}
 
@@ -364,11 +382,13 @@ func (s *Satellite) renewContractsHandler(jc jape.Context) {
 			a, err = s.bus.AddContract(ctx, ec.contract, ec.totalCost, ec.startHeight, cfg.PublicKey)
 		}
 		if jc.Check("couldn't add contract", err) != nil {
+			s.logger.Error(fmt.Sprintf("couldn't add contract: %s", err))
 			return
 		}
 		added = append(added, a)
 	}
 
+	s.logger.Info(fmt.Sprintf("successfully renewed %v contracts", len(added)))
 	jc.Encode(added)
 }
 
