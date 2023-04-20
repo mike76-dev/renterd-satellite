@@ -2,6 +2,7 @@ package satellite
 
 import (
 	"errors"
+	"fmt"
 
 	rhpv2 "go.sia.tech/core/rhp/v2"
 	"go.sia.tech/core/types"
