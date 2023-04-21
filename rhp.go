@@ -26,6 +26,7 @@ type requestRequest struct {
 // formRequest is used to request contract formation.
 type formRequest struct {
 	PubKey      types.PublicKey
+	SecretKey   types.PrivateKey
 	Hosts       uint64
 	Period      uint64
 	RenewWindow uint64
@@ -52,6 +53,7 @@ type formRequest struct {
 // renewRequest is used to request contract renewal.
 type renewRequest struct {
 	PubKey      types.PublicKey
+	SecretKey   types.PrivateKey
 	Contracts   []types.FileContractID
 	Period      uint64
 	RenewWindow uint64
@@ -221,6 +223,7 @@ func (s *Satellite) formContractsHandler(jc jape.Context) {
 
 	fr := formRequest{
 		PubKey:      pk,
+		SecretKey:   s.renterKey,
 		Hosts:       sfr.Hosts,
 		Period:      sfr.Period,
 		RenewWindow: sfr.RenewWindow,
@@ -326,6 +329,7 @@ func (s *Satellite) renewContractsHandler(jc jape.Context) {
 
 	rr := renewRequest{
 		PubKey:      pk,
+		SecretKey:   s.renterKey,
 		Contracts:   srr.Contracts,
 		Period:      srr.Period,
 		RenewWindow: srr.RenewWindow,
@@ -395,18 +399,25 @@ func (s *Satellite) renewContractsHandler(jc jape.Context) {
 
 // updateRevisionHandler submits an updated contract revision to the satellite.
 func (s *Satellite) updateRevisionHandler(jc jape.Context) {
-	cfg := s.store.getConfig()
-	if !cfg.Enabled {
-		jc.Check("ERROR", errors.New("satellite disabled"))
-		return
-	}
 	ctx := jc.Request.Context()
 	var sur UpdateRevisionRequest
 	if jc.Decode(&sur) != nil {
 		return
 	}
 
-	pk, sk := generateKeyPair(cfg.RenterSeed)
+	fcid := sur.Revision.ID()
+	spk, exists := s.store.satellite(fcid)
+	if !exists {
+		return
+	}
+
+	satellite, exists := s.store.getSatellite(spk)
+	if !exists {
+		jc.Check("ERROR", errors.New("unknown satellite"))
+		return
+	}
+
+	pk, sk := generateKeyPair(satellite.RenterSeed)
 
 	ur := updateRequest{
 		PubKey:      pk,
@@ -420,7 +431,7 @@ func (s *Satellite) updateRevisionHandler(jc jape.Context) {
 	ur.EncodeToWithoutSignature(h.E)
 	ur.Signature = sk.SignHash(h.Sum())
 
-	conn, err := dial(ctx, cfg.Address, cfg.PublicKey)
+	conn, err := dial(ctx, satellite.Address, satellite.PublicKey)
 	if jc.Check("could not connect to the host", err) != nil {
 		return
 	}
@@ -441,7 +452,7 @@ func (s *Satellite) updateRevisionHandler(jc jape.Context) {
 		}
 	}()
 
-	t, err := rhpv2.NewRenterTransport(conn, cfg.PublicKey)
+	t, err := rhpv2.NewRenterTransport(conn, satellite.PublicKey)
 	if jc.Check("could not create transport", err) != nil {
 		return
 	}

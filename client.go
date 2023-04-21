@@ -107,6 +107,23 @@ func (c *Client) DeleteContracts() error {
 	return c.c.DELETE("/contracts")
 }
 
+// AddSatellite adds a satellite to the store.
+func (c *Client) AddSatellite(si SatelliteInfo) error {
+	return c.c.PUT("/satellite", &si)
+}
+
+// GetSatellite retrieves the satellite information.
+func (c *Client) GetSatellite(pk types.PublicKey) (si SatelliteInfo, err error) {
+	err = c.c.GET(fmt.Sprintf("/satellite/%s", pk), &si)
+	return
+}
+
+// GetContracts returns all satellite contracts.
+func (c *Client) GetSatellites() (satellites map[types.PublicKey]SatelliteInfo, err error) {
+	err = c.c.GET("/satellites", &satellites)
+	return
+}
+
 // NewClient returns a client that communicates with a renterd satellite server
 // listening on the specified address.
 func NewClient(addr, password string) *Client {

@@ -52,3 +52,15 @@ type Config struct {
 	PublicKey  types.PublicKey `json:"publicKey"`
 	RenterSeed []byte          `json:"renterSeed"`
 }
+
+// SatelliteInfo contains the information about the satellite.
+type SatelliteInfo struct {
+	Address    string          `json:"address"`
+	PublicKey  types.PublicKey `json:"publicKey"`
+	RenterSeed []byte          `json:"renterSeed"`
+}
+
+// SatellitesAllResponse is the response type for the /satellites request.
+type SatellitesAllResponse struct {
+	Satellites map[types.PublicKey]SatelliteInfo `json:"satellites"`
+}

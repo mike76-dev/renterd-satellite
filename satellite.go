@@ -2,6 +2,7 @@ package satellite
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -14,6 +15,8 @@ import (
 	"go.sia.tech/renterd/api"
 
 	"go.uber.org/zap"
+
+	"golang.org/x/crypto/blake2b"
 )
 
 // busClient is the interface for renterd/bus.
@@ -30,13 +33,25 @@ type busClient interface {
 // Satellite is the interface between the renting software and the
 // Sia Satellite node.
 type Satellite struct {
-	bus    busClient
-	store  jsonStore
-	logger *zap.SugaredLogger
+	bus       busClient
+	store     jsonStore
+	logger    *zap.SugaredLogger
+	renterKey types.PrivateKey
+}
+
+// deriveRenterKey is used to derive a sub-masterkey from the worker's
+// masterKey to use for forming contracts with the hosts.
+func deriveRenterKey(key [32]byte) types.PrivateKey {
+	seed := blake2b.Sum256(append(key[:], []byte("renterkey")...))
+	pk := types.NewPrivateKeyFromSeed(seed[:])
+	for i := range seed {
+		seed[i] = 0
+	}
+	return pk
 }
 
 // NewSatellite returns a new Satellite handler.
-func NewSatellite(bc busClient, dir string, l *zap.Logger, satAddr string, satPassword string) (http.Handler, error) {
+func NewSatellite(bc busClient, dir string, seed types.PrivateKey, l *zap.Logger, satAddr string, satPassword string) (http.Handler, error) {
 	satelliteDir := filepath.Join(dir, "satellite")
 	if err := os.MkdirAll(satelliteDir, 0700); err != nil {
 		return nil, err
@@ -46,7 +61,7 @@ func NewSatellite(bc busClient, dir string, l *zap.Logger, satAddr string, satPa
 		return nil, err
 	}
 
-	s, err := New(bc, *ss, l)
+	s, err := New(bc, *ss, seed, l)
 	if err != nil {
 		return nil, err
 	}
@@ -58,11 +73,12 @@ func NewSatellite(bc busClient, dir string, l *zap.Logger, satAddr string, satPa
 }
 
 // New returns a new Satellite.
-func New(bc busClient, ss jsonStore, l *zap.Logger) (*Satellite, error) {
+func New(bc busClient, ss jsonStore, seed types.PrivateKey, l *zap.Logger) (*Satellite, error) {
 	s := &Satellite{
-		bus:    bc,
-		store:  ss,
-		logger: l.Sugar().Named("satellite"),
+		bus:       bc,
+		store:     ss,
+		renterKey: deriveRenterKey(blake2b.Sum256(append([]byte("worker"), seed...))),
+		logger:    l.Sugar().Named("satellite"),
 	}
 
 	// Save the satellite config.
@@ -136,20 +152,54 @@ func (s *Satellite) contractsHandlerDELETE(jc jape.Context) {
 	s.store.deleteAll()
 }
 
+// satelliteHandlerPUT handles the PUT /satellite request.
+func (s *Satellite) satelliteHandlerPUT(jc jape.Context) {
+	var si SatelliteInfo
+	if jc.Decode(&si) != nil {
+		return
+	}
+	jc.Check("failed to add satellite to the store", s.store.addSatellite(si))
+}
+
+// satelliteHandlerGET handles the GET /satellite requests.
+func (s *Satellite) satelliteHandlerGET(jc jape.Context) {
+	var pk types.PublicKey
+	if jc.DecodeParam("id", &pk) != nil {
+		return
+	}
+	satellite, exists := s.store.getSatellite(pk)
+	if !exists {
+		jc.Check("ERROR", errors.New("unknown satellite"))
+		return
+	}
+	jc.Encode(satellite)
+}
+
+// satellitesHandlerGET handles the GET /satellites requests.
+func (s *Satellite) satellitesHandlerGET(jc jape.Context) {
+	sar := SatellitesAllResponse{
+		Satellites: s.store.getSatellites(),
+	}
+	jc.Encode(sar)
+}
+
 // Handler returns an HTTP handler that serves the satellite API.
 func (s *Satellite) Handler() http.Handler {
 	return jape.Mux(map[string]jape.Handler{
-		"GET    /request":      s.requestContractsHandler,
-		"POST   /form":         s.formContractsHandler,
-		"POST   /renew":        s.renewContractsHandler,
-		"POST   /update":       s.updateRevisionHandler,
-		"GET    /config":       s.configHandlerGET,
-		"PUT    /config":       s.configHandlerPUT,
-		"PUT    /contract":     s.contractHandlerPUT,
-		"DELETE /contract/:id": s.contractHandlerDELETE,
-		"GET    /contract/:id": s.contractHandlerGET,
-		"GET    /contracts":    s.contractsHandlerGET,
-		"DELETE /contracts":    s.contractsHandlerDELETE,
+		"GET    /request":       s.requestContractsHandler,
+		"POST   /form":          s.formContractsHandler,
+		"POST   /renew":         s.renewContractsHandler,
+		"POST   /update":        s.updateRevisionHandler,
+		"GET    /config":        s.configHandlerGET,
+		"PUT    /config":        s.configHandlerPUT,
+		"PUT    /contract":      s.contractHandlerPUT,
+		"DELETE /contract/:id":  s.contractHandlerDELETE,
+		"GET    /contract/:id":  s.contractHandlerGET,
+		"GET    /contracts":     s.contractsHandlerGET,
+		"DELETE /contracts":     s.contractsHandlerDELETE,
+		"PUT    /satellite":     s.satelliteHandlerPUT,
+		"GET    /satellite/:id": s.satelliteHandlerGET,
+		"GET    /satellites":    s.satellitesHandlerGET,
 	})
 }
 
