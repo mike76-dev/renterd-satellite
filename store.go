@@ -29,8 +29,8 @@ func (s *ephemeralStore) getConfig() Config {
 // setConfig updates the satellite config.
 func (s *ephemeralStore) setConfig(c Config) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.config = c
+	s.mu.Unlock()
 	pk := c.PublicKey
 	if (pk != types.PublicKey{}) {
 		return s.addSatellite(SatelliteInfo{
