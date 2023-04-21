@@ -13,9 +13,10 @@ import (
 
 // ephemeralStore implements a satellite store in memory.
 type ephemeralStore struct {
-	mu        sync.Mutex
-	config    Config
-	contracts map[types.FileContractID]types.PublicKey
+	mu         sync.Mutex
+	config     Config
+	contracts  map[types.FileContractID]types.PublicKey
+	satellites map[types.PublicKey]SatelliteInfo
 }
 
 // config returns the satellite config.
@@ -30,6 +31,14 @@ func (s *ephemeralStore) setConfig(c Config) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.config = c
+	pk := c.PublicKey
+	if (pk != types.PublicKey{}) {
+		return s.addSatellite(SatelliteInfo{
+			Address:    c.Address,
+			PublicKey:  c.PublicKey,
+			RenterSeed: c.RenterSeed,
+		})
+	}
 	return nil
 }
 
@@ -74,6 +83,30 @@ func (s *ephemeralStore) deleteAll() error {
 	return nil
 }
 
+// satellites returns the map of the satellites.
+func (s *ephemeralStore) getSatellites() map[types.PublicKey]SatelliteInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.satellites
+}
+
+// getSatellite returns the information about a specific satellite.
+func (s *ephemeralStore) getSatellite(pk types.PublicKey) (SatelliteInfo, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	si, exists := s.satellites[pk]
+	return si, exists
+}
+
+// addSatellite adds a new satellite to the map.
+func (s *ephemeralStore) addSatellite(si SatelliteInfo) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pk := si.PublicKey
+	s.satellites[pk] = si
+	return nil
+}
+
 // ProcessConsensusChange implements chain.Subscriber.
 func (s *ephemeralStore) ProcessConsensusChange(cc modules.ConsensusChange) {
 	panic("not implemented")
@@ -92,8 +125,9 @@ type jsonStore struct {
 }
 
 type jsonPersistData struct {
-	Config    Config                                   `json:"config"`
-	Contracts map[types.FileContractID]types.PublicKey `json:"contracts"`
+	Config     Config                                   `json:"config"`
+	Contracts  map[types.FileContractID]types.PublicKey `json:"contracts"`
+	Satellites map[types.PublicKey]SatelliteInfo        `json:"satellites"`
 }
 
 func (s *jsonStore) save() error {
@@ -102,6 +136,7 @@ func (s *jsonStore) save() error {
 	var p jsonPersistData
 	p.Config = s.config
 	p.Contracts = s.contracts
+	p.Satellites = s.satellites
 	js, _ := json.MarshalIndent(p, "", "  ")
 
 	// Atomic save.
@@ -134,6 +169,7 @@ func (s *jsonStore) load() error {
 	}
 	s.config = p.Config
 	s.contracts = p.Contracts
+	s.satellites = p.Satellites
 	return nil
 }
 
@@ -158,6 +194,12 @@ func (s *jsonStore) deleteContract(fcid types.FileContractID) error {
 // deleteAll clears the contracts map.
 func (s *jsonStore) deleteAll() error {
 	s.ephemeralStore.deleteAll()
+	return s.save()
+}
+
+// addSatellite adds a new satellite to the map.
+func (s *jsonStore) addSatellite(si SatelliteInfo) error {
+	s.ephemeralStore.addSatellite(si)
 	return s.save()
 }
 

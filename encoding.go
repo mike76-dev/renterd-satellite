@@ -24,6 +24,7 @@ func (rr *requestRequest) DecodeFrom(d *types.Decoder) {
 // EncodeTo implements types.ProtocolObject.
 func (fr *formRequest) EncodeTo(e *types.Encoder) {
 	e.WriteBytes(fr.PubKey[:])
+	e.WriteBytes(fr.SecretKey[:])
 	e.WriteUint64(fr.Hosts)
 	e.WriteUint64(fr.Period)
 	e.WriteUint64(fr.RenewWindow)
@@ -47,6 +48,7 @@ func (fr *formRequest) EncodeTo(e *types.Encoder) {
 // leaves the signature out.
 func (fr *formRequest) EncodeToWithoutSignature(e *types.Encoder) {
 	e.WriteBytes(fr.PubKey[:])
+	e.WriteBytes(fr.SecretKey[:])
 	e.WriteUint64(fr.Hosts)
 	e.WriteUint64(fr.Period)
 	e.WriteUint64(fr.RenewWindow)
@@ -73,6 +75,7 @@ func (fr *formRequest) DecodeFrom(d *types.Decoder) {
 // EncodeTo implements types.ProtocolObject.
 func (rr *renewRequest) EncodeTo(e *types.Encoder) {
 	e.WriteBytes(rr.PubKey[:])
+	e.WriteBytes(rr.SecretKey[:])
 	e.WriteUint64(uint64(len(rr.Contracts)))
 	for _, c := range rr.Contracts {
 		e.WriteBytes(c[:])
@@ -99,6 +102,7 @@ func (rr *renewRequest) EncodeTo(e *types.Encoder) {
 // leaves the signature out.
 func (rr *renewRequest) EncodeToWithoutSignature(e *types.Encoder) {
 	e.WriteBytes(rr.PubKey[:])
+	e.WriteBytes(rr.SecretKey[:])
 	e.WriteUint64(uint64(len(rr.Contracts)))
 	for _, c := range rr.Contracts {
 		e.WriteBytes(c[:])
