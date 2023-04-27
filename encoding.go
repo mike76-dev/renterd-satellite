@@ -159,6 +159,24 @@ func (ur *updateRequest) DecodeFrom(d *types.Decoder) {
 }
 
 // EncodeTo implements types.ProtocolObject.
+func (ec *extendedContract) EncodeTo(e *types.Encoder) {
+	// Nothing to do here.
+}
+
+// DecodeFrom implements types.ProtocolObject.
+func (ec *extendedContract) DecodeFrom(d *types.Decoder) {
+	ec.contract.Revision.DecodeFrom(d)
+	ec.contract.Signatures[0].DecodeFrom(d)
+	ec.contract.Signatures[1].DecodeFrom(d)
+	ec.startHeight = d.ReadUint64()
+	ec.totalCost.DecodeFrom(d)
+	ec.uploadSpending.DecodeFrom(d)
+	ec.downloadSpending.DecodeFrom(d)
+	ec.fundAccountSpending.DecodeFrom(d)
+	ec.renewedFrom.DecodeFrom(d)
+}
+
+// EncodeTo implements types.ProtocolObject.
 func (ecs *extendedContractSet) EncodeTo(e *types.Encoder) {
 	// Nothing to do here.
 }
@@ -167,18 +185,63 @@ func (ecs *extendedContractSet) EncodeTo(e *types.Encoder) {
 func (ecs *extendedContractSet) DecodeFrom(d *types.Decoder) {
 	num := d.ReadUint64()
 	ecs.contracts = make([]extendedContract, 0, num)
-	var ec extendedContract
 	for num > 0 {
-		ec.contract.Revision.DecodeFrom(d)
-		ec.contract.Signatures[0].DecodeFrom(d)
-		ec.contract.Signatures[1].DecodeFrom(d)
-		ec.startHeight = d.ReadUint64()
-		ec.totalCost.DecodeFrom(d)
-		ec.uploadSpending.DecodeFrom(d)
-		ec.downloadSpending.DecodeFrom(d)
-		ec.fundAccountSpending.DecodeFrom(d)
-		ec.renewedFrom.DecodeFrom(d)
+		var ec extendedContract
+		ec.DecodeFrom(d)
 		ecs.contracts = append(ecs.contracts, ec)
 		num--
 	}
+}
+
+// EncodeTo implements types.ProtocolObject.
+func (fcr *formContractRequest) EncodeTo(e *types.Encoder) {
+	e.WriteBytes(fcr.PubKey[:])
+	e.WriteBytes(fcr.RenterKey[:])
+	e.WriteBytes(fcr.HostKey[:])
+	e.WriteUint64(fcr.EndHeight)
+	e.WriteUint64(fcr.Storage)
+	e.WriteUint64(fcr.Upload)
+	e.WriteUint64(fcr.Download)
+	e.WriteUint64(fcr.MinShards)
+	e.WriteUint64(fcr.TotalShards)
+	fcr.Signature.EncodeTo(e)
+}
+
+// EncodeToWithoutSignature does the same as EncodeTo but
+// leaves the signature out.
+func (fcr *formContractRequest) EncodeToWithoutSignature(e *types.Encoder) {
+	e.WriteBytes(fcr.PubKey[:])
+	e.WriteBytes(fcr.RenterKey[:])
+	e.WriteBytes(fcr.HostKey[:])
+	e.WriteUint64(fcr.EndHeight)
+	e.WriteUint64(fcr.Storage)
+	e.WriteUint64(fcr.Upload)
+	e.WriteUint64(fcr.Download)
+	e.WriteUint64(fcr.MinShards)
+	e.WriteUint64(fcr.TotalShards)
+}
+
+// DecodeFrom implements types.ProtocolObject.
+func (fcr *formContractRequest) DecodeFrom(d *types.Decoder) {
+	// Nothing to do here.
+}
+
+// EncodeTo implements types.ProtocolObject.
+func (rh *revisionHash) EncodeTo(e *types.Encoder) {
+	// Nothing to do here.
+}
+
+// DecodeFrom implements types.ProtocolObject.
+func (rh *revisionHash) DecodeFrom(d *types.Decoder) {
+	copy(rh.RevisionHash[:], d.ReadBytes())
+}
+
+// EncodeTo implements types.ProtocolObject.
+func (rs *renterSignature) EncodeTo(e *types.Encoder) {
+	e.WriteBytes(rs.Signature[:])
+}
+
+// DecodeFrom implements types.ProtocolObject.
+func (rs *renterSignature) DecodeFrom(d *types.Decoder) {
+	// Nothing to do here.
 }
