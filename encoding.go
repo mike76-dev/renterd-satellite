@@ -233,12 +233,12 @@ func (rh *revisionHash) EncodeTo(e *types.Encoder) {
 
 // DecodeFrom implements types.ProtocolObject.
 func (rh *revisionHash) DecodeFrom(d *types.Decoder) {
-	copy(rh.RevisionHash[:], d.ReadBytes())
+	rh.RevisionHash.DecodeFrom(d)
 }
 
 // EncodeTo implements types.ProtocolObject.
 func (rs *renterSignature) EncodeTo(e *types.Encoder) {
-	e.WriteBytes(rs.Signature[:])
+	rs.Signature.EncodeTo(e)
 }
 
 // DecodeFrom implements types.ProtocolObject.
