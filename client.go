@@ -126,7 +126,7 @@ func (c *Client) GetSatellites() (satellites map[types.PublicKey]SatelliteInfo, 
 
 // FormContract requests the satellite to form a contract with the
 // specified host and adds it to the contract set.
-func (c *Client) FormContract(ctx context.Context, hpk types.PublicKey, endHeight uint64, storage uint64, upload uint64, download uint64) ([]api.ContractMetadata, error) {
+func (c *Client) FormContract(ctx context.Context, hpk types.PublicKey, endHeight uint64, storage uint64, upload uint64, download uint64) (api.ContractMetadata, error) {
 	req := FormContractRequest{
 		HostKey:   hpk,
 		EndHeight: endHeight,
@@ -134,7 +134,7 @@ func (c *Client) FormContract(ctx context.Context, hpk types.PublicKey, endHeigh
 		Upload:    upload,
 		Storage:   storage,
 	}
-	var resp []api.ContractMetadata
+	var resp api.ContractMetadata
 	err := c.c.WithContext(ctx).POST("/rspv2/form", req, &resp)
 	return resp, err
 }
