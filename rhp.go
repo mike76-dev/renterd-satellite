@@ -18,6 +18,7 @@ var (
 	specifierRenewContracts   = types.NewSpecifier("RenewContracts")
 	specifierUpdateRevision   = types.NewSpecifier("UpdateRevision")
 	specifierFormContract     = types.NewSpecifier("FormContract")
+	specifierRenewContract    = types.NewSpecifier("RenewContract")
 )
 
 // requestRequest is used to request existing contracts.
@@ -60,6 +61,23 @@ type formContractRequest struct {
 	RenterKey   types.PublicKey
 	HostKey     types.PublicKey
 	EndHeight   uint64
+
+	Storage  uint64
+	Upload   uint64
+	Download uint64
+
+	MinShards   uint64
+	TotalShards uint64
+
+	Signature types.Signature
+}
+
+// renewContractRequest is used to request contract renewal using
+// the new Renter-Satellite protocol.
+type renewContractRequest struct {
+	PubKey    types.PublicKey
+	Contract  types.FileContractID
+	EndHeight uint64
 
 	Storage  uint64
 	Upload   uint64
@@ -289,7 +307,7 @@ func (s *Satellite) formContractsHandler(jc jape.Context) {
 		BlockHeightLeeway:    uint64(gp.GougingSettings.HostBlockHeightLeeway),
 	}
 
-	s.logger.Info(fmt.Sprintf("trying to form %v contracts", fr.Hosts))
+	s.logger.Debug(fmt.Sprintf("trying to form %v contracts", fr.Hosts))
 
 	h := types.NewHasher()
 	fr.EncodeToWithoutSignature(h.E)
@@ -395,7 +413,7 @@ func (s *Satellite) renewContractsHandler(jc jape.Context) {
 		BlockHeightLeeway:    uint64(gp.GougingSettings.HostBlockHeightLeeway),
 	}
 
-	s.logger.Info(fmt.Sprintf("trying to renew %v contracts", len(rr.Contracts)))
+	s.logger.Debug(fmt.Sprintf("trying to renew %v contracts", len(rr.Contracts)))
 
 	h := types.NewHasher()
 	rr.EncodeToWithoutSignature(h.E)
@@ -554,7 +572,7 @@ func (s *Satellite) formContractHandler(jc jape.Context) {
 		TotalShards: uint64(gp.RedundancySettings.TotalShards),
 	}
 
-	s.logger.Info(fmt.Sprintf("trying to form a contract with %s", sfr.HostKey))
+	s.logger.Debug(fmt.Sprintf("trying to form a contract with %s", sfr.HostKey))
 
 	h := types.NewHasher()
 	fcr.EncodeToWithoutSignature(h.E)
@@ -590,7 +608,7 @@ func (s *Satellite) formContractHandler(jc jape.Context) {
 	})
 
 	if jc.Check("couldn't form a contract", err) != nil {
-		s.logger.Error(fmt.Sprintf("couldn't form a contract: %s", err))
+		s.logger.Error(fmt.Sprintf("couldn't form a contract with %s: %s", sfr.HostKey, err))
 		return
 	}
 	
@@ -615,6 +633,106 @@ func (s *Satellite) formContractHandler(jc jape.Context) {
 		return
 	}
 
-	s.logger.Info(fmt.Sprintf("successfully added new contract with %s", sfr.HostKey))
+	s.logger.Debug(fmt.Sprintf("successfully added new contract with %s", sfr.HostKey))
+	jc.Encode(added)
+}
+
+// renewContractHandler handles the /rspv2/renew requests.
+func (s *Satellite) renewContractHandler(jc jape.Context) {
+	cfg := s.store.getConfig()
+	if !cfg.Enabled {
+		s.logger.Error("couldn't renew contract: satellite disabled")
+		jc.Check("ERROR", errors.New("satellite disabled"))
+		return
+	}
+	ctx := jc.Request.Context()
+	var srr RenewContractRequest
+	if jc.Decode(&srr) != nil {
+		return
+	}
+
+	contract, err := s.bus.Contract(ctx, srr.Contract)
+	if jc.Check("couldn't renew contract", err) != nil {
+		return
+	}
+
+	gp, err := s.bus.GougingParams(ctx)
+	if jc.Check("could not get gouging parameters", err) != nil {
+		return
+	}
+
+	pk, sk := generateKeyPair(cfg.RenterSeed)
+	renterKey := s.deriveRenterKey(contract.HostKey)
+
+	rcr := renewContractRequest{
+		PubKey:    pk,
+		Contract:  srr.Contract,
+		EndHeight: srr.EndHeight,
+
+		Storage:  srr.Storage,
+		Upload:   srr.Upload,
+		Download: srr.Download,
+
+		MinShards:   uint64(gp.RedundancySettings.MinShards),
+		TotalShards: uint64(gp.RedundancySettings.TotalShards),
+	}
+
+	s.logger.Debug(fmt.Sprintf("trying to renew a contract with %s", contract.HostKey))
+
+	h := types.NewHasher()
+	rcr.EncodeToWithoutSignature(h.E)
+	rcr.Signature = sk.SignHash(h.Sum())
+
+	var ec extendedContract
+	err = s.withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
+		if err := t.WriteRequest(specifierRenewContract, &rcr); err != nil {
+			return err
+		}
+
+		// Read the old revision hash.
+		var rh revisionHash
+		if err := t.ReadResponse(&rh, 65536); err != nil {
+			return err
+		}
+
+		// Sign the hash and send the signature to the satellite.
+		rs := &renterSignature{
+			Signature: renterKey.SignHash(rh.RevisionHash),
+		}
+		if err := t.WriteResponse(rs); err != nil {
+			return err
+		}
+
+		// Read the new revision hash.
+		if err := t.ReadResponse(&rh, 65536); err != nil {
+			return err
+		}
+
+		// Sign the hash and send the signature to the satellite.
+		rs.Signature = renterKey.SignHash(rh.RevisionHash)
+		if err := t.WriteResponse(rs); err != nil {
+			return err
+		}
+
+		// Read the new contract.
+		if err := t.ReadResponse(&ec, 65536); err != nil {
+			return err
+		}
+
+		return nil
+	})
+
+	if jc.Check("couldn't renew contract", err) != nil {
+		s.logger.Error(fmt.Sprintf("couldn't renew contract with %s: %s", contract.HostKey, err))
+		return
+	}
+
+	added, err := s.bus.AddRenewedContract(ctx, ec.contract, ec.totalCost, ec.startHeight, srr.Contract, cfg.PublicKey)
+	if jc.Check("couldn't add contract", err) != nil {
+		s.logger.Error(fmt.Sprintf("couldn't add contract: %s", err))
+		return
+	}
+
+	s.logger.Debug(fmt.Sprintf("successfully renewed contract with %s", contract.HostKey))
 	jc.Encode(added)
 }

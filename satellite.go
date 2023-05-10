@@ -201,6 +201,7 @@ func (s *Satellite) Handler() http.Handler {
 		"GET    /satellite/:id": s.satelliteHandlerGET,
 		"GET    /satellites":    s.satellitesHandlerGET,
 		"POST   /rspv2/form":    s.formContractHandler,
+		"POST   /rspv2/renew":   s.renewContractHandler,
 	})
 }
 

@@ -227,6 +227,37 @@ func (fcr *formContractRequest) DecodeFrom(d *types.Decoder) {
 }
 
 // EncodeTo implements types.ProtocolObject.
+func (rcr *renewContractRequest) EncodeTo(e *types.Encoder) {
+	e.WriteBytes(rcr.PubKey[:])
+	e.WriteBytes(rcr.Contract[:])
+	e.WriteUint64(rcr.EndHeight)
+	e.WriteUint64(rcr.Storage)
+	e.WriteUint64(rcr.Upload)
+	e.WriteUint64(rcr.Download)
+	e.WriteUint64(rcr.MinShards)
+	e.WriteUint64(rcr.TotalShards)
+	rcr.Signature.EncodeTo(e)
+}
+
+// EncodeToWithoutSignature does the same as EncodeTo but
+// leaves the signature out.
+func (rcr *renewContractRequest) EncodeToWithoutSignature(e *types.Encoder) {
+	e.WriteBytes(rcr.PubKey[:])
+	e.WriteBytes(rcr.Contract[:])
+	e.WriteUint64(rcr.EndHeight)
+	e.WriteUint64(rcr.Storage)
+	e.WriteUint64(rcr.Upload)
+	e.WriteUint64(rcr.Download)
+	e.WriteUint64(rcr.MinShards)
+	e.WriteUint64(rcr.TotalShards)
+}
+
+// DecodeFrom implements types.ProtocolObject.
+func (rcr *renewContractRequest) DecodeFrom(d *types.Decoder) {
+	// Nothing to do here.
+}
+
+// EncodeTo implements types.ProtocolObject.
 func (rh *revisionHash) EncodeTo(e *types.Encoder) {
 	// Nothing to do here.
 }
