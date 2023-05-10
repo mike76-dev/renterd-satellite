@@ -124,6 +124,36 @@ func (c *Client) GetSatellites() (satellites map[types.PublicKey]SatelliteInfo, 
 	return
 }
 
+// FormContract requests the satellite to form a contract with the
+// specified host and adds it to the contract set.
+func (c *Client) FormContract(ctx context.Context, hpk types.PublicKey, endHeight uint64, storage uint64, upload uint64, download uint64) (api.ContractMetadata, error) {
+	req := FormContractRequest{
+		HostKey:   hpk,
+		EndHeight: endHeight,
+		Download:  download,
+		Upload:    upload,
+		Storage:   storage,
+	}
+	var resp api.ContractMetadata
+	err := c.c.WithContext(ctx).POST("/rspv2/form", req, &resp)
+	return resp, err
+}
+
+// RenewContract requests the satellite to renew the specified contract
+// and adds the new contract to the contract set.
+func (c *Client) RenewContract(ctx context.Context, fcid types.FileContractID, endHeight uint64, storage uint64, upload uint64, download uint64) (api.ContractMetadata, error) {
+	req := RenewContractRequest{
+		Contract:  fcid,
+		EndHeight: endHeight,
+		Download:  download,
+		Upload:    upload,
+		Storage:   storage,
+	}
+	var resp api.ContractMetadata
+	err := c.c.WithContext(ctx).POST("/rspv2/renew", req, &resp)
+	return resp, err
+}
+
 // NewClient returns a client that communicates with a renterd satellite server
 // listening on the specified address.
 func NewClient(addr, password string) *Client {

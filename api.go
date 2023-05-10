@@ -64,3 +64,23 @@ type SatelliteInfo struct {
 type SatellitesAllResponse struct {
 	Satellites map[types.PublicKey]SatelliteInfo `json:"satellites"`
 }
+
+// FormContractRequest is the request type for the FormContract RPC.
+type FormContractRequest struct {
+	HostKey types.PublicKey `json:"hostPublicKey"`
+	// Contract configuration (all units are blocks or bytes).
+	EndHeight   uint64 `json:"endHeight"`
+	Download    uint64 `json:"download"`
+	Upload      uint64 `json:"upload"`
+	Storage     uint64 `json:"storage"`
+}
+
+// RenewContractRequest is the request type for the RenewContract RPC.
+type RenewContractRequest struct {
+	Contract types.FileContractID `json:"contract"`
+	// Contract configuration (all units are blocks or bytes).
+	EndHeight   uint64 `json:"endHeight"`
+	Download    uint64 `json:"download"`
+	Upload      uint64 `json:"upload"`
+	Storage     uint64 `json:"storage"`
+}
