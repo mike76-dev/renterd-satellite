@@ -24,7 +24,7 @@ type busClient interface {
 	AddContract(ctx context.Context, contract rhpv2.ContractRevision, totalCost types.Currency, startHeight uint64, spk types.PublicKey) (api.ContractMetadata, error)
 	AddRenewedContract(ctx context.Context, contract rhpv2.ContractRevision, totalCost types.Currency, startHeight uint64, renewedFrom types.FileContractID, spk types.PublicKey) (api.ContractMetadata, error)
 	Contract(ctx context.Context, id types.FileContractID) (api.ContractMetadata, error)
-	Contracts(ctx context.Context, set string) ([]api.ContractMetadata, error)
+	Contracts(ctx context.Context) ([]api.ContractMetadata, error)
 	GougingParams(ctx context.Context) (api.GougingParams, error)
 	RecordContractSpending(ctx context.Context, records []api.ContractSpendingRecord) error
 	SetContractSet(ctx context.Context, set string, contracts []types.FileContractID) error
