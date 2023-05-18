@@ -212,20 +212,21 @@ func (s *Satellite) requestContractsHandler(jc jape.Context) {
 	
 	var added []api.ContractMetadata
 	var contracts []types.FileContractID
+	fcids := make(map[types.FileContractID]struct{})
 
 	existing, _ := s.bus.Contracts(ctx)
 	for _, c := range existing {
 		contracts = append(contracts, c.ID)
+		fcids[c.ID] = struct{}{}
 	}
 
 	var recs []api.ContractSpendingRecord
 	for _, ec := range ecs.contracts {
 		id := ec.contract.ID()
-		contracts = append(contracts, id)
-		_, err = s.bus.Contract(ctx, id)
-		if err == nil {
-			continue
+		if _, exists := fcids[id]; exists {
+			continue // only add the contract if it's not in the database
 		}
+		contracts = append(contracts, id)
 		var a api.ContractMetadata
 		if (ec.renewedFrom == types.FileContractID{}) {
 			a, err = s.bus.AddContract(ctx, ec.contract, ec.totalCost, ec.startHeight, cfg.PublicKey)
