@@ -258,6 +258,58 @@ func (rcr *renewContractRequest) DecodeFrom(d *types.Decoder) {
 }
 
 // EncodeTo implements types.ProtocolObject.
+func (gsr *getSettingsRequest) EncodeTo(e *types.Encoder) {
+	e.WriteBytes(gsr.PubKey[:])
+	gsr.Signature.EncodeTo(e)
+}
+
+// EncodeToWithoutSignature does the same as EncodeTo but
+// leaves the signature out.
+func (gsr *getSettingsRequest) EncodeToWithoutSignature(e *types.Encoder) {
+	e.WriteBytes(gsr.PubKey[:])
+}
+
+// DecodeFrom implements types.ProtocolObject.
+func (gsr *getSettingsRequest) DecodeFrom(d *types.Decoder) {
+	// Nothing to do here.
+}
+
+// EncodeTo implements types.ProtocolObject.
+func (settings *RenterSettings) EncodeTo(e *types.Encoder) {
+	// Nothing to do here.
+}
+
+// DecodeFrom implements types.ProtocolObject.
+func (settings *RenterSettings) DecodeFrom(d *types.Decoder) {
+	settings.AutoRenewContracts = d.ReadBool()
+}
+
+// EncodeTo implements types.ProtocolObject.
+func (usr *updateSettingsRequest) EncodeTo(e *types.Encoder) {
+	e.WriteBytes(usr.PubKey[:])
+	e.WriteBool(usr.AutoRenewContracts)
+	if usr.AutoRenewContracts {
+		e.WriteBytes(usr.SecretKey)
+	}
+	usr.Signature.EncodeTo(e)
+}
+
+// EncodeToWithoutSignature does the same as EncodeTo but
+// leaves the signature out.
+func (usr *updateSettingsRequest) EncodeToWithoutSignature(e *types.Encoder) {
+	e.WriteBytes(usr.PubKey[:])
+	e.WriteBool(usr.AutoRenewContracts)
+	if usr.AutoRenewContracts {
+		e.WriteBytes(usr.SecretKey)
+	}
+}
+
+// DecodeFrom implements types.ProtocolObject.
+func (usr *updateSettingsRequest) DecodeFrom(d *types.Decoder) {
+	// Nothing to do here.
+}
+
+// EncodeTo implements types.ProtocolObject.
 func (rh *revisionHash) EncodeTo(e *types.Encoder) {
 	// Nothing to do here.
 }

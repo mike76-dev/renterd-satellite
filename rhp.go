@@ -19,6 +19,8 @@ var (
 	specifierUpdateRevision   = types.NewSpecifier("UpdateRevision")
 	specifierFormContract     = types.NewSpecifier("FormContract")
 	specifierRenewContract    = types.NewSpecifier("RenewContract")
+	specifierGetSettings      = types.NewSpecifier("GetSettings")
+	specifierUpdateSettings   = types.NewSpecifier("UpdateSettings")
 )
 
 // requestRequest is used to request existing contracts.
@@ -72,6 +74,33 @@ type formContractRequest struct {
 	Signature types.Signature
 }
 
+// renewRequest is used to request contract renewal.
+type renewRequest struct {
+	PubKey      types.PublicKey
+	SecretKey   types.PrivateKey
+	Contracts   []types.FileContractID
+	Period      uint64
+	RenewWindow uint64
+
+	Storage  uint64
+	Upload   uint64
+	Download uint64
+
+	MinShards   uint64
+	TotalShards uint64
+
+	MaxRPCPrice          types.Currency
+	MaxContractPrice     types.Currency
+	MaxDownloadPrice     types.Currency
+	MaxUploadPrice       types.Currency
+	MaxStoragePrice      types.Currency
+	MaxSectorAccessPrice types.Currency
+	MinMaxCollateral     types.Currency
+	BlockHeightLeeway    uint64
+
+	Signature types.Signature
+}
+
 // renewContractRequest is used to request contract renewal using
 // the new Renter-Satellite protocol.
 type renewContractRequest struct {
@@ -101,33 +130,6 @@ type renterSignature struct {
 	Signature types.Signature
 }
 
-// renewRequest is used to request contract renewal.
-type renewRequest struct {
-	PubKey      types.PublicKey
-	SecretKey   types.PrivateKey
-	Contracts   []types.FileContractID
-	Period      uint64
-	RenewWindow uint64
-
-	Storage  uint64
-	Upload   uint64
-	Download uint64
-
-	MinShards   uint64
-	TotalShards uint64
-
-	MaxRPCPrice          types.Currency
-	MaxContractPrice     types.Currency
-	MaxDownloadPrice     types.Currency
-	MaxUploadPrice       types.Currency
-	MaxStoragePrice      types.Currency
-	MaxSectorAccessPrice types.Currency
-	MinMaxCollateral     types.Currency
-	BlockHeightLeeway    uint64
-
-	Signature types.Signature
-}
-
 // updateRequest is used to send a new revision.
 type updateRequest struct {
 	PubKey      types.PublicKey
@@ -152,6 +154,20 @@ type extendedContract struct {
 // extendedContractSet is a collection of extendedContracts.
 type extendedContractSet struct {
 	contracts []extendedContract
+}
+
+// getSettingsRequest is used to retrieve the renter's opt-in settings.
+type getSettingsRequest struct {
+	PubKey    types.PublicKey
+	Signature types.Signature
+}
+
+// updateSettingsRequest is used to update the renter's opt-in settings.
+type updateSettingsRequest struct {
+	PubKey             types.PublicKey
+	AutoRenewContracts bool
+	SecretKey          types.PrivateKey
+	Signature          types.Signature
 }
 
 // generateKeyPair generates the keypair from a given seed.
@@ -736,4 +752,75 @@ func (s *Satellite) renewContractHandler(jc jape.Context) {
 
 	s.logger.Debug(fmt.Sprintf("successfully renewed contract with %s", contract.HostKey))
 	jc.Encode(added)
+}
+
+// settingsHandlerGET handles the GET /settings requests.
+func (s *Satellite) settingsHandlerGET(jc jape.Context) {
+	cfg := s.store.getConfig()
+	if !cfg.Enabled {
+		jc.Check("ERROR", errors.New("satellite disabled"))
+		return
+	}
+	ctx := jc.Request.Context()
+
+	pk, sk := generateKeyPair(cfg.RenterSeed)
+
+	gsr := getSettingsRequest{
+		PubKey: pk,
+	}
+
+	h := types.NewHasher()
+	gsr.EncodeToWithoutSignature(h.E)
+	gsr.Signature = sk.SignHash(h.Sum())
+
+	var settings RenterSettings
+	err := s.withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
+		if err := t.WriteRequest(specifierGetSettings, &gsr); err != nil {
+			return err
+		}
+
+		if err := t.ReadResponse(&settings, 4096); err != nil {
+			return err
+		}
+
+		return nil
+	})
+
+	if jc.Check("couldn't retrieve settings", err) != nil {
+		return
+	}
+	
+	jc.Encode(settings)
+}
+
+// settingsHandlerPOST handles the POST /settings requests.
+func (s *Satellite) settingsHandlerPOST(jc jape.Context) {
+	cfg := s.store.getConfig()
+	if !cfg.Enabled {
+		jc.Check("ERROR", errors.New("satellite disabled"))
+		return
+	}
+	ctx := jc.Request.Context()
+	var settings RenterSettings
+	if jc.Decode(&settings) != nil {
+		return
+	}
+
+	pk, sk := generateKeyPair(cfg.RenterSeed)
+
+	usr := updateSettingsRequest{
+		PubKey:             pk,
+		AutoRenewContracts: settings.AutoRenewContracts,
+		SecretKey:          s.renterKey,
+	}
+
+	h := types.NewHasher()
+	usr.EncodeToWithoutSignature(h.E)
+	usr.Signature = sk.SignHash(h.Sum())
+
+	err := s.withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
+		return t.WriteRequest(specifierUpdateSettings, &usr)
+	})
+
+	jc.Check("couldn't update settings", err)
 }

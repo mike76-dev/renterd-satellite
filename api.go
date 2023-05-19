@@ -84,3 +84,8 @@ type RenewContractRequest struct {
 	Upload      uint64 `json:"upload"`
 	Storage     uint64 `json:"storage"`
 }
+
+// RenterSettings contains the renter's opt-in settings.
+type RenterSettings struct {
+	AutoRenewContracts bool `json:"autoRenew"`
+}

@@ -154,6 +154,17 @@ func (c *Client) RenewContract(ctx context.Context, fcid types.FileContractID, e
 	return resp, err
 }
 
+// GetSettings retrieves the renter's opt-in settings.
+func (c *Client) GetSettings(ctx context.Context) (settings RenterSettings, err error) {
+	err = c.c.WithContext(ctx).GET("/settings", &settings)
+	return
+}
+
+// UpdateSettings updates the renter's opt-in settings.
+func (c *Client) UpdateSettings(ctx context.Context, settings RenterSettings) error {
+	return c.c.WithContext(ctx).POST("/settings", &settings, nil)
+}
+
 // NewClient returns a client that communicates with a renterd satellite server
 // listening on the specified address.
 func NewClient(addr, password string) *Client {
