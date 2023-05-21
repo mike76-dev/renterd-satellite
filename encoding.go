@@ -290,6 +290,22 @@ func (usr *updateSettingsRequest) EncodeTo(e *types.Encoder) {
 	e.WriteBool(usr.AutoRenewContracts)
 	if usr.AutoRenewContracts {
 		e.WriteBytes(usr.SecretKey)
+		e.WriteUint64(usr.Hosts)
+		e.WriteUint64(usr.Period)
+		e.WriteUint64(usr.RenewWindow)
+		e.WriteUint64(usr.Storage)
+		e.WriteUint64(usr.Upload)
+		e.WriteUint64(usr.Download)
+		e.WriteUint64(usr.MinShards)
+		e.WriteUint64(usr.TotalShards)
+		usr.MaxRPCPrice.EncodeTo(e)
+		usr.MaxContractPrice.EncodeTo(e)
+		usr.MaxDownloadPrice.EncodeTo(e)
+		usr.MaxUploadPrice.EncodeTo(e)
+		usr.MaxStoragePrice.EncodeTo(e)
+		usr.MaxSectorAccessPrice.EncodeTo(e)
+		usr.MinMaxCollateral.EncodeTo(e)
+		e.WriteUint64(usr.BlockHeightLeeway)
 	}
 	usr.Signature.EncodeTo(e)
 }
@@ -301,6 +317,22 @@ func (usr *updateSettingsRequest) EncodeToWithoutSignature(e *types.Encoder) {
 	e.WriteBool(usr.AutoRenewContracts)
 	if usr.AutoRenewContracts {
 		e.WriteBytes(usr.SecretKey)
+		e.WriteUint64(usr.Hosts)
+		e.WriteUint64(usr.Period)
+		e.WriteUint64(usr.RenewWindow)
+		e.WriteUint64(usr.Storage)
+		e.WriteUint64(usr.Upload)
+		e.WriteUint64(usr.Download)
+		e.WriteUint64(usr.MinShards)
+		e.WriteUint64(usr.TotalShards)
+		usr.MaxRPCPrice.EncodeTo(e)
+		usr.MaxContractPrice.EncodeTo(e)
+		usr.MaxDownloadPrice.EncodeTo(e)
+		usr.MaxUploadPrice.EncodeTo(e)
+		usr.MaxStoragePrice.EncodeTo(e)
+		usr.MaxSectorAccessPrice.EncodeTo(e)
+		usr.MinMaxCollateral.EncodeTo(e)
+		e.WriteUint64(usr.BlockHeightLeeway)
 	}
 }
 

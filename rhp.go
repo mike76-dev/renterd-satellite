@@ -167,6 +167,25 @@ type updateSettingsRequest struct {
 	PubKey             types.PublicKey
 	AutoRenewContracts bool
 	SecretKey          types.PrivateKey
+
+	Hosts       uint64
+	Period      uint64
+	RenewWindow uint64
+	Storage     uint64
+	Upload      uint64
+	Download    uint64
+	MinShards   uint64
+	TotalShards uint64
+
+	MaxRPCPrice          types.Currency
+	MaxContractPrice     types.Currency
+	MaxDownloadPrice     types.Currency
+	MaxUploadPrice       types.Currency
+	MaxStoragePrice      types.Currency
+	MaxSectorAccessPrice types.Currency
+	MinMaxCollateral     types.Currency
+	BlockHeightLeeway    uint64
+
 	Signature          types.Signature
 }
 
@@ -806,19 +825,49 @@ func (s *Satellite) settingsHandlerPOST(jc jape.Context) {
 		return
 	}
 
+	gp, err := s.bus.GougingParams(ctx)
+	if jc.Check("could not get gouging parameters", err) != nil {
+		return
+	}
+
+	ac, err := s.ap.Config()
+	if jc.Check("could not get autopilot config", err) != nil {
+		return
+	}
+
 	pk, sk := generateKeyPair(cfg.RenterSeed)
 
 	usr := updateSettingsRequest{
 		PubKey:             pk,
 		AutoRenewContracts: settings.AutoRenewContracts,
 		SecretKey:          s.renterKey,
+
+		Hosts:       ac.Contracts.Amount,
+		Period:      ac.Contracts.Period,
+		RenewWindow: ac.Contracts.RenewWindow,
+
+		Storage:  ac.Contracts.Storage,
+		Upload:   ac.Contracts.Upload,
+		Download: ac.Contracts.Download,
+
+		MinShards:   uint64(gp.RedundancySettings.MinShards),
+		TotalShards: uint64(gp.RedundancySettings.TotalShards),
+
+		MaxRPCPrice:          gp.GougingSettings.MaxRPCPrice,
+		MaxContractPrice:     gp.GougingSettings.MaxContractPrice,
+		MaxDownloadPrice:     gp.GougingSettings.MaxDownloadPrice,
+		MaxUploadPrice:       gp.GougingSettings.MaxUploadPrice,
+		MaxStoragePrice:      gp.GougingSettings.MaxStoragePrice,
+		MaxSectorAccessPrice: gp.GougingSettings.MaxRPCPrice.Mul64(10),
+		MinMaxCollateral:     gp.GougingSettings.MinMaxCollateral,
+		BlockHeightLeeway:    uint64(gp.GougingSettings.HostBlockHeightLeeway),
 	}
 
 	h := types.NewHasher()
 	usr.EncodeToWithoutSignature(h.E)
 	usr.Signature = sk.SignHash(h.Sum())
 
-	err := s.withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
+	err = s.withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
 		return t.WriteRequest(specifierUpdateSettings, &usr)
 	})
 

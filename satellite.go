@@ -19,6 +19,11 @@ import (
 	"golang.org/x/crypto/blake2b"
 )
 
+// autopilotClient is the interface for renterd/autopilot.
+type autopilotClient interface {
+	Config() (cfg api.AutopilotConfig, err error)
+}
+
 // busClient is the interface for renterd/bus.
 type busClient interface {
 	AddContract(ctx context.Context, contract rhpv2.ContractRevision, totalCost types.Currency, startHeight uint64, spk types.PublicKey) (api.ContractMetadata, error)
@@ -33,6 +38,7 @@ type busClient interface {
 // Satellite is the interface between the renting software and the
 // Sia Satellite node.
 type Satellite struct {
+	ap        autopilotClient
 	bus       busClient
 	store     jsonStore
 	logger    *zap.SugaredLogger
@@ -51,7 +57,7 @@ func deriveRenterKey(key [32]byte) types.PrivateKey {
 }
 
 // NewSatellite returns a new Satellite handler.
-func NewSatellite(bc busClient, dir string, seed types.PrivateKey, l *zap.Logger, satAddr string, satPassword string) (http.Handler, error) {
+func NewSatellite(ac autopilotClient, bc busClient, dir string, seed types.PrivateKey, l *zap.Logger, satAddr string, satPassword string) (http.Handler, error) {
 	satelliteDir := filepath.Join(dir, "satellite")
 	if err := os.MkdirAll(satelliteDir, 0700); err != nil {
 		return nil, err
@@ -61,7 +67,7 @@ func NewSatellite(bc busClient, dir string, seed types.PrivateKey, l *zap.Logger
 		return nil, err
 	}
 
-	s, err := New(bc, *ss, seed, l)
+	s, err := New(ac, bc, *ss, seed, l)
 	if err != nil {
 		return nil, err
 	}
@@ -73,8 +79,9 @@ func NewSatellite(bc busClient, dir string, seed types.PrivateKey, l *zap.Logger
 }
 
 // New returns a new Satellite.
-func New(bc busClient, ss jsonStore, seed types.PrivateKey, l *zap.Logger) (*Satellite, error) {
+func New(ac autopilotClient, bc busClient, ss jsonStore, seed types.PrivateKey, l *zap.Logger) (*Satellite, error) {
 	s := &Satellite{
+		ap:        ac,
 		bus:       bc,
 		store:     ss,
 		renterKey: deriveRenterKey(blake2b.Sum256(append([]byte("worker"), seed...))),
