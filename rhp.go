@@ -775,11 +775,13 @@ func (s *Satellite) renewContractHandler(jc jape.Context) {
 
 // settingsHandlerGET handles the GET /settings requests.
 func (s *Satellite) settingsHandlerGET(jc jape.Context) {
+	var settings RenterSettings
 	cfg := s.store.getConfig()
 	if !cfg.Enabled {
-		jc.Check("ERROR", errors.New("satellite disabled"))
+		jc.Encode(settings)
 		return
 	}
+
 	ctx := jc.Request.Context()
 
 	pk, sk := generateKeyPair(cfg.RenterSeed)
@@ -792,7 +794,6 @@ func (s *Satellite) settingsHandlerGET(jc jape.Context) {
 	gsr.EncodeToWithoutSignature(h.E)
 	gsr.Signature = sk.SignHash(h.Sum())
 
-	var settings RenterSettings
 	err := s.withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
 		if err := t.WriteRequest(specifierGetSettings, &gsr); err != nil {
 			return err
@@ -816,9 +817,9 @@ func (s *Satellite) settingsHandlerGET(jc jape.Context) {
 func (s *Satellite) settingsHandlerPOST(jc jape.Context) {
 	cfg := s.store.getConfig()
 	if !cfg.Enabled {
-		jc.Check("ERROR", errors.New("satellite disabled"))
 		return
 	}
+
 	ctx := jc.Request.Context()
 	var settings RenterSettings
 	if jc.Decode(&settings) != nil {
