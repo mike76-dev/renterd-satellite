@@ -6,14 +6,14 @@ import (
 
 // EncodeTo implements types.ProtocolObject.
 func (rr *requestRequest) EncodeTo(e *types.Encoder) {
-	e.WriteBytes(rr.PubKey[:])
+	e.Write(rr.PubKey[:])
 	rr.Signature.EncodeTo(e)
 }
 
 // EncodeToWithoutSignature does the same as EncodeTo but
 // leaves the signature out.
 func (rr *requestRequest) EncodeToWithoutSignature(e *types.Encoder) {
-	e.WriteBytes(rr.PubKey[:])
+	e.Write(rr.PubKey[:])
 }
 
 // DecodeFrom implements types.ProtocolObject.
@@ -23,7 +23,7 @@ func (rr *requestRequest) DecodeFrom(d *types.Decoder) {
 
 // EncodeTo implements types.ProtocolObject.
 func (fr *formRequest) EncodeTo(e *types.Encoder) {
-	e.WriteBytes(fr.PubKey[:])
+	e.Write(fr.PubKey[:])
 	e.WriteBytes(fr.SecretKey[:])
 	e.WriteUint64(fr.Hosts)
 	e.WriteUint64(fr.Period)
@@ -47,7 +47,7 @@ func (fr *formRequest) EncodeTo(e *types.Encoder) {
 // EncodeToWithoutSignature does the same as EncodeTo but
 // leaves the signature out.
 func (fr *formRequest) EncodeToWithoutSignature(e *types.Encoder) {
-	e.WriteBytes(fr.PubKey[:])
+	e.Write(fr.PubKey[:])
 	e.WriteBytes(fr.SecretKey[:])
 	e.WriteUint64(fr.Hosts)
 	e.WriteUint64(fr.Period)
@@ -74,11 +74,11 @@ func (fr *formRequest) DecodeFrom(d *types.Decoder) {
 
 // EncodeTo implements types.ProtocolObject.
 func (rr *renewRequest) EncodeTo(e *types.Encoder) {
-	e.WriteBytes(rr.PubKey[:])
+	e.Write(rr.PubKey[:])
 	e.WriteBytes(rr.SecretKey[:])
 	e.WriteUint64(uint64(len(rr.Contracts)))
 	for _, c := range rr.Contracts {
-		e.WriteBytes(c[:])
+		e.Write(c[:])
 	}
 	e.WriteUint64(rr.Period)
 	e.WriteUint64(rr.RenewWindow)
@@ -101,11 +101,11 @@ func (rr *renewRequest) EncodeTo(e *types.Encoder) {
 // EncodeToWithoutSignature does the same as EncodeTo but
 // leaves the signature out.
 func (rr *renewRequest) EncodeToWithoutSignature(e *types.Encoder) {
-	e.WriteBytes(rr.PubKey[:])
+	e.Write(rr.PubKey[:])
 	e.WriteBytes(rr.SecretKey[:])
 	e.WriteUint64(uint64(len(rr.Contracts)))
 	for _, c := range rr.Contracts {
-		e.WriteBytes(c[:])
+		e.Write(c[:])
 	}
 	e.WriteUint64(rr.Period)
 	e.WriteUint64(rr.RenewWindow)
@@ -131,7 +131,7 @@ func (rr *renewRequest) DecodeFrom(d *types.Decoder) {
 
 // EncodeTo implements types.ProtocolObject.
 func (ur *updateRequest) EncodeTo(e *types.Encoder) {
-	e.WriteBytes(ur.PubKey[:])
+	e.Write(ur.PubKey[:])
 	ur.Contract.Revision.EncodeTo(e)
 	ur.Contract.Signatures[0].EncodeTo(e)
 	ur.Contract.Signatures[1].EncodeTo(e)
@@ -144,7 +144,7 @@ func (ur *updateRequest) EncodeTo(e *types.Encoder) {
 // EncodeToWithoutSignature does the same as EncodeTo but
 // leaves the signature out.
 func (ur *updateRequest) EncodeToWithoutSignature(e *types.Encoder) {
-	e.WriteBytes(ur.PubKey[:])
+	e.Write(ur.PubKey[:])
 	ur.Contract.Revision.EncodeTo(e)
 	ur.Contract.Signatures[0].EncodeTo(e)
 	ur.Contract.Signatures[1].EncodeTo(e)
@@ -195,9 +195,9 @@ func (ecs *extendedContractSet) DecodeFrom(d *types.Decoder) {
 
 // EncodeTo implements types.ProtocolObject.
 func (fcr *formContractRequest) EncodeTo(e *types.Encoder) {
-	e.WriteBytes(fcr.PubKey[:])
-	e.WriteBytes(fcr.RenterKey[:])
-	e.WriteBytes(fcr.HostKey[:])
+	e.Write(fcr.PubKey[:])
+	e.Write(fcr.RenterKey[:])
+	e.Write(fcr.HostKey[:])
 	e.WriteUint64(fcr.EndHeight)
 	e.WriteUint64(fcr.Storage)
 	e.WriteUint64(fcr.Upload)
@@ -210,9 +210,9 @@ func (fcr *formContractRequest) EncodeTo(e *types.Encoder) {
 // EncodeToWithoutSignature does the same as EncodeTo but
 // leaves the signature out.
 func (fcr *formContractRequest) EncodeToWithoutSignature(e *types.Encoder) {
-	e.WriteBytes(fcr.PubKey[:])
-	e.WriteBytes(fcr.RenterKey[:])
-	e.WriteBytes(fcr.HostKey[:])
+	e.Write(fcr.PubKey[:])
+	e.Write(fcr.RenterKey[:])
+	e.Write(fcr.HostKey[:])
 	e.WriteUint64(fcr.EndHeight)
 	e.WriteUint64(fcr.Storage)
 	e.WriteUint64(fcr.Upload)
@@ -228,8 +228,8 @@ func (fcr *formContractRequest) DecodeFrom(d *types.Decoder) {
 
 // EncodeTo implements types.ProtocolObject.
 func (rcr *renewContractRequest) EncodeTo(e *types.Encoder) {
-	e.WriteBytes(rcr.PubKey[:])
-	e.WriteBytes(rcr.Contract[:])
+	e.Write(rcr.PubKey[:])
+	e.Write(rcr.Contract[:])
 	e.WriteUint64(rcr.EndHeight)
 	e.WriteUint64(rcr.Storage)
 	e.WriteUint64(rcr.Upload)
@@ -242,8 +242,8 @@ func (rcr *renewContractRequest) EncodeTo(e *types.Encoder) {
 // EncodeToWithoutSignature does the same as EncodeTo but
 // leaves the signature out.
 func (rcr *renewContractRequest) EncodeToWithoutSignature(e *types.Encoder) {
-	e.WriteBytes(rcr.PubKey[:])
-	e.WriteBytes(rcr.Contract[:])
+	e.Write(rcr.PubKey[:])
+	e.Write(rcr.Contract[:])
 	e.WriteUint64(rcr.EndHeight)
 	e.WriteUint64(rcr.Storage)
 	e.WriteUint64(rcr.Upload)
@@ -259,14 +259,14 @@ func (rcr *renewContractRequest) DecodeFrom(d *types.Decoder) {
 
 // EncodeTo implements types.ProtocolObject.
 func (gsr *getSettingsRequest) EncodeTo(e *types.Encoder) {
-	e.WriteBytes(gsr.PubKey[:])
+	e.Write(gsr.PubKey[:])
 	gsr.Signature.EncodeTo(e)
 }
 
 // EncodeToWithoutSignature does the same as EncodeTo but
 // leaves the signature out.
 func (gsr *getSettingsRequest) EncodeToWithoutSignature(e *types.Encoder) {
-	e.WriteBytes(gsr.PubKey[:])
+	e.Write(gsr.PubKey[:])
 }
 
 // DecodeFrom implements types.ProtocolObject.
@@ -286,7 +286,7 @@ func (settings *RenterSettings) DecodeFrom(d *types.Decoder) {
 
 // EncodeTo implements types.ProtocolObject.
 func (usr *updateSettingsRequest) EncodeTo(e *types.Encoder) {
-	e.WriteBytes(usr.PubKey[:])
+	e.Write(usr.PubKey[:])
 	e.WriteBool(usr.AutoRenewContracts)
 	if usr.AutoRenewContracts {
 		e.WriteBytes(usr.SecretKey)
@@ -313,7 +313,7 @@ func (usr *updateSettingsRequest) EncodeTo(e *types.Encoder) {
 // EncodeToWithoutSignature does the same as EncodeTo but
 // leaves the signature out.
 func (usr *updateSettingsRequest) EncodeToWithoutSignature(e *types.Encoder) {
-	e.WriteBytes(usr.PubKey[:])
+	e.Write(usr.PubKey[:])
 	e.WriteBool(usr.AutoRenewContracts)
 	if usr.AutoRenewContracts {
 		e.WriteBytes(usr.SecretKey)
