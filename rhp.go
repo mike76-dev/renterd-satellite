@@ -59,10 +59,10 @@ type formRequest struct {
 // formContractRequest is used to request contract formation using
 // the new Renter-Satellite protocol.
 type formContractRequest struct {
-	PubKey      types.PublicKey
-	RenterKey   types.PublicKey
-	HostKey     types.PublicKey
-	EndHeight   uint64
+	PubKey    types.PublicKey
+	RenterKey types.PublicKey
+	HostKey   types.PublicKey
+	EndHeight uint64
 
 	Storage  uint64
 	Upload   uint64
@@ -186,7 +186,7 @@ type updateSettingsRequest struct {
 	MinMaxCollateral     types.Currency
 	BlockHeightLeeway    uint64
 
-	Signature          types.Signature
+	Signature types.Signature
 }
 
 // generateKeyPair generates the keypair from a given seed.
@@ -244,7 +244,7 @@ func (s *Satellite) requestContractsHandler(jc jape.Context) {
 		s.logger.Error(fmt.Sprintf("couldn't request contracts: %s", err))
 		return
 	}
-	
+
 	var added []api.ContractMetadata
 	var contracts []types.FileContractID
 	fcids := make(map[types.FileContractID]struct{})
@@ -267,6 +267,10 @@ func (s *Satellite) requestContractsHandler(jc jape.Context) {
 			a, err = s.bus.AddContract(ctx, ec.contract, ec.totalCost, ec.startHeight, cfg.PublicKey)
 		} else {
 			a, err = s.bus.AddRenewedContract(ctx, ec.contract, ec.totalCost, ec.startHeight, ec.renewedFrom, cfg.PublicKey)
+			if err != nil {
+				// there might be no old contract in the archive, add as a new contract
+				a, err = s.bus.AddContract(ctx, ec.contract, ec.totalCost, ec.startHeight, cfg.PublicKey)
+			}
 		}
 		if jc.Check("couldn't add contract", err) != nil {
 			s.logger.Error(fmt.Sprintf("couldn't add requested contract: %s", err))
@@ -279,7 +283,7 @@ func (s *Satellite) requestContractsHandler(jc jape.Context) {
 				Downloads:   ec.downloadSpending,
 				FundAccount: ec.fundAccountSpending,
 			},
-			ContractID:  id,
+			ContractID: id,
 		})
 	}
 	err = s.bus.RecordContractSpending(ctx, recs)
@@ -366,7 +370,7 @@ func (s *Satellite) formContractsHandler(jc jape.Context) {
 		s.logger.Error(fmt.Sprintf("couldn't form contracts: %s", err))
 		return
 	}
-	
+
 	var added []api.ContractMetadata
 	var contracts []types.FileContractID
 
@@ -647,7 +651,7 @@ func (s *Satellite) formContractHandler(jc jape.Context) {
 		s.logger.Error(fmt.Sprintf("couldn't form a contract with %s: %s", sfr.HostKey, err))
 		return
 	}
-	
+
 	var contracts []types.FileContractID
 
 	existing, _ := s.bus.Contracts(ctx)
@@ -809,7 +813,7 @@ func (s *Satellite) settingsHandlerGET(jc jape.Context) {
 	if jc.Check("couldn't retrieve settings", err) != nil {
 		return
 	}
-	
+
 	jc.Encode(settings)
 }
 
