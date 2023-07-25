@@ -114,7 +114,10 @@ func (s *ephemeralStore) ProcessConsensusChange(cc modules.ConsensusChange) {
 
 // newEphemeralStore returns a new EphemeralStore.
 func newEphemeralStore() *ephemeralStore {
-	return &ephemeralStore{}
+	return &ephemeralStore{
+		contracts:  make(map[types.FileContractID]types.PublicKey),
+		satellites: make(map[types.PublicKey]SatelliteInfo),
+	}
 }
 
 // jsonStore implements a satellite store in memory, backed by a JSON file.
@@ -141,7 +144,7 @@ func (s *jsonStore) save() error {
 
 	// Atomic save.
 	dst := filepath.Join(s.dir, "satellite.json")
-	f, err := os.OpenFile(dst + "_tmp", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0660)
+	f, err := os.OpenFile(dst+"_tmp", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0660)
 	if err != nil {
 		return err
 	}
@@ -152,7 +155,7 @@ func (s *jsonStore) save() error {
 		return err
 	} else if err := f.Close(); err != nil {
 		return err
-	} else if err := os.Rename(dst + "_tmp", dst); err != nil {
+	} else if err := os.Rename(dst+"_tmp", dst); err != nil {
 		return err
 	}
 	return nil
