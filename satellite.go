@@ -113,6 +113,9 @@ func (s *Satellite) configHandlerPUT(jc jape.Context) {
 	if jc.Check("failed to set config", s.store.setConfig(sc)) != nil {
 		return
 	}
+	if sc.Enabled {
+		s.requestContractsHandler(jc)
+	}
 }
 
 // contractHandlerPUT handles the PUT /contract request.
