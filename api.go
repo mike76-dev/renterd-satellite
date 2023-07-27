@@ -88,5 +88,5 @@ type RenewContractRequest struct {
 // RenterSettings contains the renter's opt-in settings.
 type RenterSettings struct {
 	AutoRenewContracts bool `json:"autoRenew"`
-	BackupFileMetadata bool `jaon:"backupMetadata"`
+	BackupFileMetadata bool `json:"backupMetadata"`
 }
