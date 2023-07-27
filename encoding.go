@@ -1,7 +1,11 @@
 package satellite
 
 import (
+	"encoding/hex"
+	"strings"
+
 	"go.sia.tech/core/types"
+	"go.sia.tech/renterd/object"
 )
 
 // EncodeTo implements types.ProtocolObject.
@@ -282,5 +286,65 @@ func (rs *renterSignature) EncodeTo(e *types.Encoder) {
 
 // DecodeFrom implements types.ProtocolObject.
 func (rs *renterSignature) DecodeFrom(d *types.Decoder) {
+	// Nothing to do here.
+}
+
+// EncodeTo implements types.ProtocolObject.
+func (fm *FileMetadata) EncodeTo(e *types.Encoder) {
+	key, _ := hex.DecodeString(strings.TrimPrefix(fm.Key.String(), "key:"))
+	e.Write(key[:])
+	e.WriteString(fm.Path)
+	e.WritePrefix(len(fm.Slabs))
+	for _, s := range fm.Slabs {
+		key, _ := hex.DecodeString(strings.TrimPrefix(s.Key.String(), "key:"))
+		e.Write(key[:])
+		e.WriteUint64(uint64(s.MinShards))
+		e.WriteUint64(uint64(s.Offset))
+		e.WriteUint64(uint64(s.Length))
+		e.WritePrefix(len(s.Shards))
+		for _, ss := range s.Shards {
+			e.Write(ss.Host[:])
+			e.Write(ss.Root[:])
+		}
+	}
+}
+
+// DecodeFrom implements types.ProtocolObject.
+func (fm *FileMetadata) DecodeFrom(d *types.Decoder) {
+	var key types.Hash256
+	d.Read(key[:])
+	fm.Key.UnmarshalText(key[:])
+	fm.Path = d.ReadString()
+	fm.Slabs = make([]object.SlabSlice, d.ReadPrefix())
+	for i := 0; i < len(fm.Slabs); i++ {
+		var key types.Hash256
+		d.Read(key[:])
+		fm.Slabs[i].Key.UnmarshalText(key[:])
+		fm.Slabs[i].MinShards = uint8(d.ReadUint64())
+		fm.Slabs[i].Offset = uint32(d.ReadUint64())
+		fm.Slabs[i].Length = uint32(d.ReadUint64())
+		fm.Slabs[i].Shards = make([]object.Sector, d.ReadPrefix())
+		for j := 0; j < len(fm.Slabs[i].Shards); j++ {
+			d.Read(fm.Slabs[i].Shards[j].Host[:])
+			d.Read(fm.Slabs[i].Shards[j].Root[:])
+		}
+	}
+}
+
+// EncodeTo implements types.ProtocolObject.
+func (smr *saveMetadataRequest) EncodeTo(e *types.Encoder) {
+	smr.EncodeToWithoutSignature(e)
+	smr.Signature.EncodeTo(e)
+}
+
+// EncodeToWithoutSignature does the same as EncodeTo but
+// leaves the signature out.
+func (smr *saveMetadataRequest) EncodeToWithoutSignature(e *types.Encoder) {
+	e.Write(smr.PubKey[:])
+	smr.Metadata.EncodeTo(e)
+}
+
+// DecodeFrom implements types.ProtocolObject.
+func (smr *saveMetadataRequest) DecodeFrom(d *types.Decoder) {
 	// Nothing to do here.
 }

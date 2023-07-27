@@ -173,3 +173,12 @@ func NewClient(addr, password string) *Client {
 		Password: password,
 	}}
 }
+
+// SaveMetadata sends the file metadata to the satellite.
+func (c *Client) SaveMetadata(ctx context.Context, fm FileMetadata) error {
+	req := SaveMetadataRequest{
+		Metadata: fm,
+	}
+	err := c.c.WithContext(ctx).POST("/metadata", req, nil)
+	return err
+}
