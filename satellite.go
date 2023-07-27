@@ -214,6 +214,7 @@ func (s *Satellite) Handler() http.Handler {
 		"POST   /rspv2/renew":   s.renewContractHandler,
 		"GET    /settings":      s.settingsHandlerGET,
 		"POST   /settings":      s.settingsHandlerPOST,
+		"POST   /metadata":      s.saveMetadataHandler,
 	})
 }
 

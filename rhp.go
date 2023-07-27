@@ -21,6 +21,7 @@ var (
 	specifierRenewContract    = types.NewSpecifier("RenewContract")
 	specifierGetSettings      = types.NewSpecifier("GetSettings")
 	specifierUpdateSettings   = types.NewSpecifier("UpdateSettings")
+	specifierSaveMetadata     = types.NewSpecifier("SaveMetadata")
 )
 
 // requestRequest is used to request existing contracts.
@@ -187,6 +188,13 @@ type updateSettingsRequest struct {
 	MinMaxCollateral     types.Currency
 	BlockHeightLeeway    uint64
 
+	Signature types.Signature
+}
+
+// saveMetadataRequest is used to save file metadata on the satellite.
+type saveMetadataRequest struct {
+	PubKey    types.PublicKey
+	Metadata  FileMetadata
 	Signature types.Signature
 }
 
@@ -879,4 +887,49 @@ func (s *Satellite) settingsHandlerPOST(jc jape.Context) {
 	})
 
 	jc.Check("couldn't update settings", err)
+}
+
+// saveMetadataHandler sends the file metadata to the satellite.
+func (s *Satellite) saveMetadataHandler(jc jape.Context) {
+	cfg := s.store.getConfig()
+	if !cfg.Enabled {
+		return
+	}
+	ctx := jc.Request.Context()
+	var fmr SaveMetadataRequest
+	if jc.Decode(&fmr) != nil {
+		return
+	}
+
+	pk, sk := generateKeyPair(cfg.RenterSeed)
+
+	smr := saveMetadataRequest{
+		PubKey:   pk,
+		Metadata: fmr.Metadata,
+	}
+
+	h := types.NewHasher()
+	smr.EncodeToWithoutSignature(h.E)
+	smr.Signature = sk.SignHash(h.Sum())
+
+	err := s.withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
+		err = t.WriteRequest(specifierSaveMetadata, &smr)
+		if err != nil {
+			return
+		}
+
+		var resp rhpv2.RPCError
+		err = t.ReadResponse(&resp, 1024)
+		if jc.Check("could not read response", err) != nil {
+			return
+		}
+
+		if resp.Description != "" {
+			return errors.New(resp.Description)
+		}
+
+		return nil
+	})
+
+	jc.Check("couldn't save metadata", err)
 }

@@ -4,6 +4,7 @@ import (
 	rhpv2 "go.sia.tech/core/rhp/v2"
 	"go.sia.tech/core/types"
 	"go.sia.tech/renterd/api"
+	"go.sia.tech/renterd/object"
 )
 
 // FormRequest is the request type for the FormContracts RPC.
@@ -89,4 +90,16 @@ type RenewContractRequest struct {
 type RenterSettings struct {
 	AutoRenewContracts bool `json:"autoRenew"`
 	BackupFileMetadata bool `json:"backupMetadata"`
+}
+
+// FileMetadata contains the uploaded file metadata.
+type FileMetadata struct {
+	Key   object.EncryptionKey `json:"key"`
+	Path  string               `json:"path"`
+	Slabs []object.SlabSlice   `json:"slabs"`
+}
+
+// SaveMetadataRequest is the request type for the SaveMetadata RPC.
+type SaveMetadataRequest struct {
+	Metadata FileMetadata `json:"metadata"`
 }
