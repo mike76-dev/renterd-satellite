@@ -8,6 +8,7 @@ import (
 	"go.sia.tech/core/types"
 	"go.sia.tech/jape"
 	"go.sia.tech/renterd/api"
+	"go.sia.tech/renterd/object"
 )
 
 // A Client provides methods for interacting with an API server.
@@ -165,15 +166,6 @@ func (c *Client) UpdateSettings(ctx context.Context, settings RenterSettings) er
 	return c.c.WithContext(ctx).POST("/settings", &settings, nil)
 }
 
-// NewClient returns a client that communicates with a renterd satellite server
-// listening on the specified address.
-func NewClient(addr, password string) *Client {
-	return &Client{jape.Client{
-		BaseURL:  addr,
-		Password: password,
-	}}
-}
-
 // SaveMetadata sends the file metadata to the satellite.
 func (c *Client) SaveMetadata(ctx context.Context, fm FileMetadata) error {
 	req := SaveMetadataRequest{
@@ -181,4 +173,19 @@ func (c *Client) SaveMetadata(ctx context.Context, fm FileMetadata) error {
 	}
 	err := c.c.WithContext(ctx).POST("/metadata", req, nil)
 	return err
+}
+
+// RequestMetadata requests the file metadata from the satellite.
+func (c *Client) RequestMetadata(ctx context.Context, set string) (objects []object.Object, err error) {
+	err = c.c.WithContext(ctx).GET(fmt.Sprintf("/metadata/%s", set), &objects)
+	return
+}
+
+// NewClient returns a client that communicates with a renterd satellite server
+// listening on the specified address.
+func NewClient(addr, password string) *Client {
+	return &Client{jape.Client{
+		BaseURL:  addr,
+		Password: password,
+	}}
 }
