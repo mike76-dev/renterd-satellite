@@ -348,3 +348,41 @@ func (smr *saveMetadataRequest) EncodeToWithoutSignature(e *types.Encoder) {
 func (smr *saveMetadataRequest) DecodeFrom(d *types.Decoder) {
 	// Nothing to do here.
 }
+
+// EncodeTo implements types.ProtocolObject.
+func (rf *renterFiles) EncodeTo(e *types.Encoder) {
+	// Nothing to do here.
+}
+
+// DecodeFrom implements types.ProtocolObject.
+func (rf *renterFiles) DecodeFrom(d *types.Decoder) {
+	num := d.ReadUint64()
+	rf.metadata = make([]FileMetadata, 0, num)
+	for num > 0 {
+		var fm FileMetadata
+		fm.DecodeFrom(d)
+		rf.metadata = append(rf.metadata, fm)
+		num--
+	}
+}
+
+// EncodeTo implements types.ProtocolObject.
+func (rmr *requestMetadataRequest) EncodeTo(e *types.Encoder) {
+	rmr.EncodeToWithoutSignature(e)
+	rmr.Signature.EncodeTo(e)
+}
+
+// EncodeToWithoutSignature does the same as EncodeTo but
+// leaves the signature out.
+func (rmr *requestMetadataRequest) EncodeToWithoutSignature(e *types.Encoder) {
+	e.Write(rmr.PubKey[:])
+	e.WritePrefix(len(rmr.PresentObjects))
+	for _, po := range rmr.PresentObjects {
+		e.WriteString(po)
+	}
+}
+
+// DecodeFrom implements types.ProtocolObject.
+func (rmr *requestMetadataRequest) DecodeFrom(d *types.Decoder) {
+	// Nothing to do here.
+}
