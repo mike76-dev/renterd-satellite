@@ -90,6 +90,7 @@ type RenewContractRequest struct {
 type RenterSettings struct {
 	AutoRenewContracts bool `json:"autoRenew"`
 	BackupFileMetadata bool `json:"backupMetadata"`
+	AutoRepairFiles    bool `json:"autoRepair"`
 }
 
 // FileMetadata contains the uploaded file metadata.

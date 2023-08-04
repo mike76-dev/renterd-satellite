@@ -170,6 +170,7 @@ type updateSettingsRequest struct {
 	PubKey             types.PublicKey
 	AutoRenewContracts bool
 	BackupFileMetadata bool
+	AutoRepairFiles    bool
 	SecretKey          types.PrivateKey
 
 	Hosts       uint64
@@ -869,6 +870,7 @@ func (s *Satellite) settingsHandlerPOST(jc jape.Context) {
 		PubKey:             pk,
 		AutoRenewContracts: settings.AutoRenewContracts,
 		BackupFileMetadata: settings.BackupFileMetadata,
+		AutoRepairFiles:    settings.AutoRepairFiles,
 		SecretKey:          s.renterKey,
 
 		Hosts:       ac.Contracts.Amount,
