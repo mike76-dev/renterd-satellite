@@ -390,3 +390,30 @@ func (rmr *requestMetadataRequest) EncodeToWithoutSignature(e *types.Encoder) {
 func (rmr *requestMetadataRequest) DecodeFrom(d *types.Decoder) {
 	// Nothing to do here.
 }
+
+// EncodeTo implements types.ProtocolObject.
+func (usr *updateSlabRequest) EncodeTo(e *types.Encoder) {
+	usr.EncodeToWithoutSignature(e)
+	usr.Signature.EncodeTo(e)
+}
+
+// EncodeToWithoutSignature does the same as EncodeTo but
+// leaves the signature out.
+func (usr *updateSlabRequest) EncodeToWithoutSignature(e *types.Encoder) {
+	e.Write(usr.PubKey[:])
+	key, _ := hex.DecodeString(strings.TrimPrefix(usr.Slab.Key.String(), "key:"))
+	e.Write(key[:])
+	e.WriteUint64(uint64(usr.Slab.MinShards))
+	e.WriteUint64(uint64(usr.Slab.Offset))
+	e.WriteUint64(uint64(usr.Slab.Length))
+	e.WritePrefix(len(usr.Slab.Shards))
+	for _, ss := range usr.Slab.Shards {
+		e.Write(ss.Host[:])
+		e.Write(ss.Root[:])
+	}
+}
+
+// DecodeFrom implements types.ProtocolObject.
+func (usr *updateSlabRequest) DecodeFrom(d *types.Decoder) {
+	// Nothing to do here.
+}

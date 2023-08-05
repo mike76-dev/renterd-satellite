@@ -104,3 +104,8 @@ type FileMetadata struct {
 type SaveMetadataRequest struct {
 	Metadata FileMetadata `json:"metadata"`
 }
+
+// UpdateSlabRequest is the request type for the UpdateSlab RPC.
+type UpdateSlabRequest struct {
+	Slab object.Slab `json:"slab"`
+}

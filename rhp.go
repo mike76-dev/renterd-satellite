@@ -24,6 +24,7 @@ var (
 	specifierUpdateSettings   = types.NewSpecifier("UpdateSettings")
 	specifierSaveMetadata     = types.NewSpecifier("SaveMetadata")
 	specifierRequestMetadata  = types.NewSpecifier("RequestMetadata")
+	specifierUpdateSlab       = types.NewSpecifier("UpdateSlab")
 )
 
 // requestRequest is used to request existing contracts.
@@ -211,6 +212,13 @@ type requestMetadataRequest struct {
 	PubKey         types.PublicKey
 	PresentObjects []string
 	Signature      types.Signature
+}
+
+// updateSlabRequest is used to update a slab after a successful migration.
+type updateSlabRequest struct {
+	PubKey    types.PublicKey
+	Slab      object.SlabSlice
+	Signature types.Signature
 }
 
 // generateKeyPair generates the keypair from a given seed.
@@ -947,7 +955,9 @@ func (s *Satellite) saveMetadataHandler(jc jape.Context) {
 		return nil
 	})
 
-	jc.Check("couldn't save metadata", err)
+	if jc.Check("couldn't save metadata", err) != nil {
+		s.logger.Error(fmt.Sprintf("couldn't save file metadata: %s", err))
+	}
 }
 
 // requestMetadataHandler handles the GET /metadata requests.
@@ -1036,4 +1046,55 @@ func (s *Satellite) requestMetadataHandler(jc jape.Context) {
 
 	s.logger.Info(fmt.Sprintf("successfully added %v objects", len(objects)))
 	jc.Encode(objects)
+}
+
+// updateSlabHandler handles the POST /slab requests.
+func (s *Satellite) updateSlabHandler(jc jape.Context) {
+	cfg := s.store.getConfig()
+	if !cfg.Enabled {
+		return
+	}
+	ctx := jc.Request.Context()
+	var req UpdateSlabRequest
+	if jc.Decode(&req) != nil {
+		return
+	}
+
+	pk, sk := generateKeyPair(cfg.RenterSeed)
+
+	usr := updateSlabRequest{
+		PubKey: pk,
+		Slab:   object.SlabSlice{
+			Slab:   req.Slab,
+			Offset: 0,
+			Length: 0,
+		},
+	}
+
+	h := types.NewHasher()
+	usr.EncodeToWithoutSignature(h.E)
+	usr.Signature = sk.SignHash(h.Sum())
+
+	err := s.withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
+		err = t.WriteRequest(specifierUpdateSlab, &usr)
+		if err != nil {
+			return
+		}
+
+		var resp rhpv2.RPCError
+		err = t.ReadResponse(&resp, 1024)
+		if jc.Check("could not read response", err) != nil {
+			return
+		}
+
+		if resp.Description != "" {
+			return errors.New(resp.Description)
+		}
+
+		return nil
+	})
+
+	if jc.Check("couldn't update slab", err) != nil {
+		s.logger.Error(fmt.Sprintf("couldn't update slab: %s", err))
+	}
 }
