@@ -220,6 +220,7 @@ func (s *Satellite) Handler() http.Handler {
 		"POST   /settings":      s.settingsHandlerPOST,
 		"POST   /metadata":      s.saveMetadataHandler,
 		"GET    /metadata/:set": s.requestMetadataHandler,
+		"POST   /slab":          s.updateSlabHandler,
 	})
 }
 

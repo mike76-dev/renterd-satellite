@@ -181,6 +181,15 @@ func (c *Client) RequestMetadata(ctx context.Context, set string) (objects []obj
 	return
 }
 
+// UpdateSlab sends the updated slab to the satellite.
+func (c *Client) UpdateSlab(ctx context.Context, s object.Slab) error {
+	req := UpdateSlabRequest{
+		Slab: s,
+	}
+	err := c.c.WithContext(ctx).POST("/slab", req, nil)
+	return err
+}
+
 // NewClient returns a client that communicates with a renterd satellite server
 // listening on the specified address.
 func NewClient(addr, password string) *Client {
