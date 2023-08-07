@@ -248,6 +248,9 @@ func (usr *updateSettingsRequest) EncodeToWithoutSignature(e *types.Encoder) {
 	if usr.AutoRenewContracts || usr.AutoRepairFiles {
 		e.WriteBytes(usr.SecretKey)
 	}
+	if usr.AutoRepairFiles {
+		e.WriteBytes(usr.AccountKey)
+	}
 	if usr.AutoRenewContracts {
 		e.WriteUint64(usr.Hosts)
 		e.WriteUint64(usr.Period)

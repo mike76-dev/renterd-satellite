@@ -173,6 +173,7 @@ type updateSettingsRequest struct {
 	BackupFileMetadata bool
 	AutoRepairFiles    bool
 	SecretKey          types.PrivateKey
+	AccountKey         types.PrivateKey
 
 	Hosts       uint64
 	Period      uint64
@@ -880,6 +881,7 @@ func (s *Satellite) settingsHandlerPOST(jc jape.Context) {
 		BackupFileMetadata: settings.BackupFileMetadata,
 		AutoRepairFiles:    settings.AutoRepairFiles,
 		SecretKey:          s.renterKey,
+		AccountKey:         s.accountKey,
 
 		Hosts:       ac.Contracts.Amount,
 		Period:      ac.Contracts.Period,
@@ -1064,7 +1066,7 @@ func (s *Satellite) updateSlabHandler(jc jape.Context) {
 
 	usr := updateSlabRequest{
 		PubKey: pk,
-		Slab:   object.SlabSlice{
+		Slab: object.SlabSlice{
 			Slab:   req.Slab,
 			Offset: 0,
 			Length: 0,
