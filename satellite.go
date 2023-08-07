@@ -42,11 +42,12 @@ type busClient interface {
 // Satellite is the interface between the renting software and the
 // Sia Satellite node.
 type Satellite struct {
-	ap        autopilotClient
-	bus       busClient
-	store     jsonStore
-	logger    *zap.SugaredLogger
-	renterKey types.PrivateKey
+	ap         autopilotClient
+	bus        busClient
+	store      jsonStore
+	logger     *zap.SugaredLogger
+	renterKey  types.PrivateKey
+	accountKey types.PrivateKey
 }
 
 // deriveRenterKey is used to derive a sub-masterkey from the worker's
@@ -85,11 +86,12 @@ func NewSatellite(ac autopilotClient, bc busClient, dir string, seed types.Priva
 // New returns a new Satellite.
 func New(ac autopilotClient, bc busClient, ss jsonStore, seed types.PrivateKey, l *zap.Logger) (*Satellite, error) {
 	s := &Satellite{
-		ap:        ac,
-		bus:       bc,
-		store:     ss,
-		renterKey: deriveRenterKey(blake2b.Sum256(append([]byte("worker"), seed...))),
-		logger:    l.Sugar().Named("satellite"),
+		ap:         ac,
+		bus:        bc,
+		store:      ss,
+		renterKey:  deriveRenterKey(blake2b.Sum256(append([]byte("worker"), seed...))),
+		accountKey: deriveRenterKey(blake2b.Sum256(append([]byte("accountkey"), seed...))),
+		logger:     l.Sugar().Named("satellite"),
 	}
 
 	// Save the satellite config.
