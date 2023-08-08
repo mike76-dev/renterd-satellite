@@ -61,6 +61,17 @@ func deriveRenterKey(key [32]byte) types.PrivateKey {
 	return pk
 }
 
+// deriveAccountKey is used to derive a sub-masterkey from the worker's
+// masterKey to use for accessing the ephemeral accounts at the hosts.
+func deriveAccountKey(key [32]byte) types.PrivateKey {
+	seed := blake2b.Sum256(append(key[:], []byte("accountkey")...))
+	pk := types.NewPrivateKeyFromSeed(seed[:])
+	for i := range seed {
+		seed[i] = 0
+	}
+	return pk
+}
+
 // NewSatellite returns a new Satellite handler.
 func NewSatellite(ac autopilotClient, bc busClient, dir string, seed types.PrivateKey, l *zap.Logger, satAddr string, satPassword string) (http.Handler, error) {
 	satelliteDir := filepath.Join(dir, "satellite")
@@ -90,7 +101,7 @@ func New(ac autopilotClient, bc busClient, ss jsonStore, seed types.PrivateKey, 
 		bus:        bc,
 		store:      ss,
 		renterKey:  deriveRenterKey(blake2b.Sum256(append([]byte("worker"), seed...))),
-		accountKey: deriveRenterKey(blake2b.Sum256(append([]byte("accountkey"), seed...))),
+		accountKey: deriveAccountKey(blake2b.Sum256(append([]byte("worker"), seed...))),
 		logger:     l.Sugar().Named("satellite"),
 	}
 
