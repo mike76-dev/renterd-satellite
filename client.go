@@ -8,6 +8,7 @@ import (
 	"go.sia.tech/core/types"
 	"go.sia.tech/jape"
 	"go.sia.tech/renterd/api"
+	"go.sia.tech/renterd/object"
 )
 
 // A Client provides methods for interacting with an API server.
@@ -163,6 +164,30 @@ func (c *Client) GetSettings(ctx context.Context) (settings RenterSettings, err 
 // UpdateSettings updates the renter's opt-in settings.
 func (c *Client) UpdateSettings(ctx context.Context, settings RenterSettings) error {
 	return c.c.WithContext(ctx).POST("/settings", &settings, nil)
+}
+
+// SaveMetadata sends the file metadata to the satellite.
+func (c *Client) SaveMetadata(ctx context.Context, fm FileMetadata) error {
+	req := SaveMetadataRequest{
+		Metadata: fm,
+	}
+	err := c.c.WithContext(ctx).POST("/metadata", req, nil)
+	return err
+}
+
+// RequestMetadata requests the file metadata from the satellite.
+func (c *Client) RequestMetadata(ctx context.Context, set string) (objects []object.Object, err error) {
+	err = c.c.WithContext(ctx).GET(fmt.Sprintf("/metadata/%s", set), &objects)
+	return
+}
+
+// UpdateSlab sends the updated slab to the satellite.
+func (c *Client) UpdateSlab(ctx context.Context, s object.Slab) error {
+	req := UpdateSlabRequest{
+		Slab: s,
+	}
+	err := c.c.WithContext(ctx).POST("/slab", req, nil)
+	return err
 }
 
 // NewClient returns a client that communicates with a renterd satellite server
