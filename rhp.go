@@ -8,6 +8,7 @@ import (
 	"go.sia.tech/core/types"
 	"go.sia.tech/jape"
 	"go.sia.tech/renterd/api"
+	"go.sia.tech/renterd/object"
 
 	"golang.org/x/crypto/blake2b"
 )
@@ -21,6 +22,9 @@ var (
 	specifierRenewContract    = types.NewSpecifier("RenewContract")
 	specifierGetSettings      = types.NewSpecifier("GetSettings")
 	specifierUpdateSettings   = types.NewSpecifier("UpdateSettings")
+	specifierSaveMetadata     = types.NewSpecifier("SaveMetadata")
+	specifierRequestMetadata  = types.NewSpecifier("RequestMetadata")
+	specifierUpdateSlab       = types.NewSpecifier("UpdateSlab")
 )
 
 // requestRequest is used to request existing contracts.
@@ -59,10 +63,10 @@ type formRequest struct {
 // formContractRequest is used to request contract formation using
 // the new Renter-Satellite protocol.
 type formContractRequest struct {
-	PubKey      types.PublicKey
-	RenterKey   types.PublicKey
-	HostKey     types.PublicKey
-	EndHeight   uint64
+	PubKey    types.PublicKey
+	RenterKey types.PublicKey
+	HostKey   types.PublicKey
+	EndHeight uint64
 
 	Storage  uint64
 	Upload   uint64
@@ -166,7 +170,10 @@ type getSettingsRequest struct {
 type updateSettingsRequest struct {
 	PubKey             types.PublicKey
 	AutoRenewContracts bool
+	BackupFileMetadata bool
+	AutoRepairFiles    bool
 	SecretKey          types.PrivateKey
+	AccountKey         types.PrivateKey
 
 	Hosts       uint64
 	Period      uint64
@@ -186,7 +193,33 @@ type updateSettingsRequest struct {
 	MinMaxCollateral     types.Currency
 	BlockHeightLeeway    uint64
 
-	Signature          types.Signature
+	Signature types.Signature
+}
+
+// saveMetadataRequest is used to save file metadata on the satellite.
+type saveMetadataRequest struct {
+	PubKey    types.PublicKey
+	Metadata  FileMetadata
+	Signature types.Signature
+}
+
+// renterFiles is a collection of FileMetadata.
+type renterFiles struct {
+	metadata []FileMetadata
+}
+
+// requestMetadataRequest is used to request file metadata.
+type requestMetadataRequest struct {
+	PubKey         types.PublicKey
+	PresentObjects []string
+	Signature      types.Signature
+}
+
+// updateSlabRequest is used to update a slab after a successful migration.
+type updateSlabRequest struct {
+	PubKey    types.PublicKey
+	Slab      object.SlabSlice
+	Signature types.Signature
 }
 
 // generateKeyPair generates the keypair from a given seed.
@@ -244,7 +277,7 @@ func (s *Satellite) requestContractsHandler(jc jape.Context) {
 		s.logger.Error(fmt.Sprintf("couldn't request contracts: %s", err))
 		return
 	}
-	
+
 	var added []api.ContractMetadata
 	var contracts []types.FileContractID
 	fcids := make(map[types.FileContractID]struct{})
@@ -267,6 +300,10 @@ func (s *Satellite) requestContractsHandler(jc jape.Context) {
 			a, err = s.bus.AddContract(ctx, ec.contract, ec.totalCost, ec.startHeight, cfg.PublicKey)
 		} else {
 			a, err = s.bus.AddRenewedContract(ctx, ec.contract, ec.totalCost, ec.startHeight, ec.renewedFrom, cfg.PublicKey)
+			if err != nil {
+				// there might be no old contract in the archive, add as a new contract
+				a, err = s.bus.AddContract(ctx, ec.contract, ec.totalCost, ec.startHeight, cfg.PublicKey)
+			}
 		}
 		if jc.Check("couldn't add contract", err) != nil {
 			s.logger.Error(fmt.Sprintf("couldn't add requested contract: %s", err))
@@ -279,7 +316,7 @@ func (s *Satellite) requestContractsHandler(jc jape.Context) {
 				Downloads:   ec.downloadSpending,
 				FundAccount: ec.fundAccountSpending,
 			},
-			ContractID:  id,
+			ContractID: id,
 		})
 	}
 	err = s.bus.RecordContractSpending(ctx, recs)
@@ -366,7 +403,7 @@ func (s *Satellite) formContractsHandler(jc jape.Context) {
 		s.logger.Error(fmt.Sprintf("couldn't form contracts: %s", err))
 		return
 	}
-	
+
 	var added []api.ContractMetadata
 	var contracts []types.FileContractID
 
@@ -647,7 +684,7 @@ func (s *Satellite) formContractHandler(jc jape.Context) {
 		s.logger.Error(fmt.Sprintf("couldn't form a contract with %s: %s", sfr.HostKey, err))
 		return
 	}
-	
+
 	var contracts []types.FileContractID
 
 	existing, _ := s.bus.Contracts(ctx)
@@ -809,7 +846,7 @@ func (s *Satellite) settingsHandlerGET(jc jape.Context) {
 	if jc.Check("couldn't retrieve settings", err) != nil {
 		return
 	}
-	
+
 	jc.Encode(settings)
 }
 
@@ -841,7 +878,10 @@ func (s *Satellite) settingsHandlerPOST(jc jape.Context) {
 	usr := updateSettingsRequest{
 		PubKey:             pk,
 		AutoRenewContracts: settings.AutoRenewContracts,
+		BackupFileMetadata: settings.BackupFileMetadata,
+		AutoRepairFiles:    settings.AutoRepairFiles,
 		SecretKey:          s.renterKey,
+		AccountKey:         s.accountKey,
 
 		Hosts:       ac.Contracts.Amount,
 		Period:      ac.Contracts.Period,
@@ -873,4 +913,190 @@ func (s *Satellite) settingsHandlerPOST(jc jape.Context) {
 	})
 
 	jc.Check("couldn't update settings", err)
+}
+
+// saveMetadataHandler handles the POST /metadata requests.
+func (s *Satellite) saveMetadataHandler(jc jape.Context) {
+	cfg := s.store.getConfig()
+	if !cfg.Enabled {
+		return
+	}
+	ctx := jc.Request.Context()
+	var fmr SaveMetadataRequest
+	if jc.Decode(&fmr) != nil {
+		return
+	}
+
+	pk, sk := generateKeyPair(cfg.RenterSeed)
+
+	smr := saveMetadataRequest{
+		PubKey:   pk,
+		Metadata: fmr.Metadata,
+	}
+
+	h := types.NewHasher()
+	smr.EncodeToWithoutSignature(h.E)
+	smr.Signature = sk.SignHash(h.Sum())
+
+	err := s.withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
+		err = t.WriteRequest(specifierSaveMetadata, &smr)
+		if err != nil {
+			return
+		}
+
+		var resp rhpv2.RPCError
+		err = t.ReadResponse(&resp, 1024)
+		if jc.Check("could not read response", err) != nil {
+			return
+		}
+
+		if resp.Description != "" {
+			return errors.New(resp.Description)
+		}
+
+		return nil
+	})
+
+	if jc.Check("couldn't save metadata", err) != nil {
+		s.logger.Error(fmt.Sprintf("couldn't save file metadata: %s", err))
+	}
+}
+
+// requestMetadataHandler handles the GET /metadata requests.
+func (s *Satellite) requestMetadataHandler(jc jape.Context) {
+	cfg := s.store.getConfig()
+	if !cfg.Enabled {
+		s.logger.Error("couldn't request file metadata: satellite disabled")
+		jc.Check("ERROR", errors.New("satellite disabled"))
+		return
+	}
+	set := jc.PathParam("set")
+	if set == "" {
+		jc.Check("ERROR", errors.New("contract set cannot be empty"))
+		return
+	}
+	s.logger.Info("requesting file metadata from the satellite")
+	ctx := jc.Request.Context()
+
+	pk, sk := generateKeyPair(cfg.RenterSeed)
+
+	_, entries, err := s.bus.Object(ctx, "")
+	if jc.Check("couldn't requests present objects", err) != nil {
+		return
+	}
+
+	rmr := requestMetadataRequest{
+		PubKey: pk,
+	}
+	for _, entry := range entries {
+		rmr.PresentObjects = append(rmr.PresentObjects, entry.Name)
+	}
+
+	h := types.NewHasher()
+	rmr.EncodeToWithoutSignature(h.E)
+	rmr.Signature = sk.SignHash(h.Sum())
+
+	var rf renterFiles
+	err = s.withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
+		if err := t.WriteRequest(specifierRequestMetadata, &rmr); err != nil {
+			return err
+		}
+
+		if err := t.ReadResponse(&rf, 65536); err != nil {
+			return err
+		}
+
+		return nil
+	})
+
+	if jc.Check("couldn't request file metadata", err) != nil {
+		s.logger.Error(fmt.Sprintf("couldn't request file metadata: %s", err))
+		return
+	}
+
+	contracts, err := s.bus.ContractSetContracts(ctx, set)
+	if jc.Check("couldn't fetch contracts from bus", err) != nil {
+		return
+	}
+
+	var objects []object.Object
+	for _, fm := range rf.metadata {
+		obj := object.Object{
+			Key:   fm.Key,
+			Slabs: fm.Slabs,
+		}
+		h2c := make(map[types.PublicKey]types.FileContractID)
+		for _, c := range contracts {
+			h2c[c.HostKey] = c.ID
+		}
+		used := make(map[types.PublicKey]types.FileContractID)
+		for _, s := range obj.Slabs {
+			for _, ss := range s.Shards {
+				used[ss.Host] = h2c[ss.Host]
+			}
+		}
+		_, _, err := s.bus.Object(ctx, fm.Path)
+		if err == nil {
+			continue // only add the object if it's not present already
+		}
+		if err := s.bus.AddObject(ctx, fm.Path, set, obj, used); err != nil {
+			s.logger.Error(fmt.Sprintf("couldn't add object: %s", err))
+			continue
+		}
+		objects = append(objects, obj)
+	}
+
+	s.logger.Info(fmt.Sprintf("successfully added %v objects", len(objects)))
+	jc.Encode(objects)
+}
+
+// updateSlabHandler handles the POST /slab requests.
+func (s *Satellite) updateSlabHandler(jc jape.Context) {
+	cfg := s.store.getConfig()
+	if !cfg.Enabled {
+		return
+	}
+	ctx := jc.Request.Context()
+	var req UpdateSlabRequest
+	if jc.Decode(&req) != nil {
+		return
+	}
+
+	pk, sk := generateKeyPair(cfg.RenterSeed)
+
+	usr := updateSlabRequest{
+		PubKey: pk,
+		Slab: object.SlabSlice{
+			Slab:   req.Slab,
+			Offset: 0,
+			Length: 0,
+		},
+	}
+
+	h := types.NewHasher()
+	usr.EncodeToWithoutSignature(h.E)
+	usr.Signature = sk.SignHash(h.Sum())
+
+	err := s.withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
+		err = t.WriteRequest(specifierUpdateSlab, &usr)
+		if err != nil {
+			return
+		}
+
+		var resp rhpv2.RPCError
+		err = t.ReadResponse(&resp, 1024)
+		if jc.Check("could not read response", err) != nil {
+			return
+		}
+
+		if resp.Description != "" {
+			return errors.New(resp.Description)
+		}
+
+		return nil
+	})
+
+	if jc.Check("couldn't update slab", err) != nil {
+		s.logger.Error(fmt.Sprintf("couldn't update slab: %s", err))
+	}
 }

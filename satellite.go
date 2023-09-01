@@ -13,6 +13,7 @@ import (
 	"go.sia.tech/core/types"
 	"go.sia.tech/jape"
 	"go.sia.tech/renterd/api"
+	"go.sia.tech/renterd/object"
 
 	"go.uber.org/zap"
 
@@ -27,10 +28,13 @@ type autopilotClient interface {
 // busClient is the interface for renterd/bus.
 type busClient interface {
 	AddContract(ctx context.Context, contract rhpv2.ContractRevision, totalCost types.Currency, startHeight uint64, spk types.PublicKey) (api.ContractMetadata, error)
+	AddObject(ctx context.Context, path, contractSet string, o object.Object, usedContracts map[types.PublicKey]types.FileContractID) error
 	AddRenewedContract(ctx context.Context, contract rhpv2.ContractRevision, totalCost types.Currency, startHeight uint64, renewedFrom types.FileContractID, spk types.PublicKey) (api.ContractMetadata, error)
 	Contract(ctx context.Context, id types.FileContractID) (api.ContractMetadata, error)
 	Contracts(ctx context.Context) ([]api.ContractMetadata, error)
+	ContractSetContracts(ctx context.Context, set string) (contracts []api.ContractMetadata, err error)
 	GougingParams(ctx context.Context) (api.GougingParams, error)
+	Object(ctx context.Context, path string, options ...api.ObjectsOption) (api.Object, []api.ObjectMetadata, error)
 	RecordContractSpending(ctx context.Context, records []api.ContractSpendingRecord) error
 	SetContractSet(ctx context.Context, set string, contracts []types.FileContractID) error
 }
@@ -38,17 +42,29 @@ type busClient interface {
 // Satellite is the interface between the renting software and the
 // Sia Satellite node.
 type Satellite struct {
-	ap        autopilotClient
-	bus       busClient
-	store     jsonStore
-	logger    *zap.SugaredLogger
-	renterKey types.PrivateKey
+	ap         autopilotClient
+	bus        busClient
+	store      jsonStore
+	logger     *zap.SugaredLogger
+	renterKey  types.PrivateKey
+	accountKey types.PrivateKey
 }
 
 // deriveRenterKey is used to derive a sub-masterkey from the worker's
 // masterKey to use for forming contracts with the hosts.
 func deriveRenterKey(key [32]byte) types.PrivateKey {
 	seed := blake2b.Sum256(append(key[:], []byte("renterkey")...))
+	pk := types.NewPrivateKeyFromSeed(seed[:])
+	for i := range seed {
+		seed[i] = 0
+	}
+	return pk
+}
+
+// deriveAccountKey is used to derive a sub-masterkey from the worker's
+// masterKey to use for accessing the ephemeral accounts at the hosts.
+func deriveAccountKey(key [32]byte) types.PrivateKey {
+	seed := blake2b.Sum256(append(key[:], []byte("accountkey")...))
 	pk := types.NewPrivateKeyFromSeed(seed[:])
 	for i := range seed {
 		seed[i] = 0
@@ -81,11 +97,12 @@ func NewSatellite(ac autopilotClient, bc busClient, dir string, seed types.Priva
 // New returns a new Satellite.
 func New(ac autopilotClient, bc busClient, ss jsonStore, seed types.PrivateKey, l *zap.Logger) (*Satellite, error) {
 	s := &Satellite{
-		ap:        ac,
-		bus:       bc,
-		store:     ss,
-		renterKey: deriveRenterKey(blake2b.Sum256(append([]byte("worker"), seed...))),
-		logger:    l.Sugar().Named("satellite"),
+		ap:         ac,
+		bus:        bc,
+		store:      ss,
+		renterKey:  deriveRenterKey(blake2b.Sum256(append([]byte("worker"), seed...))),
+		accountKey: deriveAccountKey(blake2b.Sum256(append([]byte("worker"), seed...))),
+		logger:     l.Sugar().Named("satellite"),
 	}
 
 	// Save the satellite config.
@@ -112,6 +129,9 @@ func (s *Satellite) configHandlerPUT(jc jape.Context) {
 	}
 	if jc.Check("failed to set config", s.store.setConfig(sc)) != nil {
 		return
+	}
+	if sc.Enabled {
+		s.requestContractsHandler(jc)
 	}
 }
 
@@ -211,6 +231,9 @@ func (s *Satellite) Handler() http.Handler {
 		"POST   /rspv2/renew":   s.renewContractHandler,
 		"GET    /settings":      s.settingsHandlerGET,
 		"POST   /settings":      s.settingsHandlerPOST,
+		"POST   /metadata":      s.saveMetadataHandler,
+		"GET    /metadata/:set": s.requestMetadataHandler,
+		"POST   /slab":          s.updateSlabHandler,
 	})
 }
 
