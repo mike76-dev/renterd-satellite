@@ -28,11 +28,12 @@ type autopilotClient interface {
 // busClient is the interface for renterd/bus.
 type busClient interface {
 	AddContract(ctx context.Context, contract rhpv2.ContractRevision, totalCost types.Currency, startHeight uint64, spk types.PublicKey) (api.ContractMetadata, error)
-	AddObject(ctx context.Context, path, contractSet string, o object.Object, usedContracts map[types.PublicKey]types.FileContractID) error
+	AddObject(ctx context.Context, bucket, path, contractSet string, o object.Object, usedContracts map[types.PublicKey]types.FileContractID) error
 	AddRenewedContract(ctx context.Context, contract rhpv2.ContractRevision, totalCost types.Currency, startHeight uint64, renewedFrom types.FileContractID, spk types.PublicKey) (api.ContractMetadata, error)
 	Contract(ctx context.Context, id types.FileContractID) (api.ContractMetadata, error)
 	Contracts(ctx context.Context) ([]api.ContractMetadata, error)
 	ContractSetContracts(ctx context.Context, set string) (contracts []api.ContractMetadata, err error)
+	DeleteObject(ctx context.Context, bucket, path string, batch bool) error
 	GougingParams(ctx context.Context) (api.GougingParams, error)
 	Object(ctx context.Context, path string, options ...api.ObjectsOption) (api.Object, []api.ObjectMetadata, error)
 	RecordContractSpending(ctx context.Context, records []api.ContractSpendingRecord) error
