@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	rhpv2 "go.sia.tech/core/rhp/v2"
 	"go.sia.tech/core/types"
@@ -35,9 +36,14 @@ type busClient interface {
 	ContractSetContracts(ctx context.Context, set string) (contracts []api.ContractMetadata, err error)
 	DeleteObject(ctx context.Context, bucket, path string, batch bool) error
 	GougingParams(ctx context.Context) (api.GougingParams, error)
-	Object(ctx context.Context, path string, options ...api.ObjectsOption) (api.Object, []api.ObjectMetadata, error)
+	Object(ctx context.Context, path string, options ...api.ObjectsOption) (api.ObjectsResponse, error)
 	RecordContractSpending(ctx context.Context, records []api.ContractSpendingRecord) error
 	SetContractSet(ctx context.Context, set string, contracts []types.FileContractID) error
+}
+
+// workerClient is the interface for renterd/worker.
+type workerClient interface {
+	Contracts(ctx context.Context, hostTimeout time.Duration) (resp api.ContractsResponse, err error)
 }
 
 // Satellite is the interface between the renting software and the
@@ -45,6 +51,7 @@ type busClient interface {
 type Satellite struct {
 	ap         autopilotClient
 	bus        busClient
+	worker     workerClient
 	store      jsonStore
 	logger     *zap.SugaredLogger
 	renterKey  types.PrivateKey
@@ -74,7 +81,7 @@ func deriveAccountKey(key [32]byte) types.PrivateKey {
 }
 
 // NewSatellite returns a new Satellite handler.
-func NewSatellite(ac autopilotClient, bc busClient, dir string, seed types.PrivateKey, l *zap.Logger, satAddr string, satPassword string) (http.Handler, error) {
+func NewSatellite(ac autopilotClient, bc busClient, wc workerClient, dir string, seed types.PrivateKey, l *zap.Logger, satAddr string, satPassword string) (http.Handler, error) {
 	satelliteDir := filepath.Join(dir, "satellite")
 	if err := os.MkdirAll(satelliteDir, 0700); err != nil {
 		return nil, err
@@ -84,7 +91,7 @@ func NewSatellite(ac autopilotClient, bc busClient, dir string, seed types.Priva
 		return nil, err
 	}
 
-	s, err := New(ac, bc, *ss, seed, l)
+	s, err := New(ac, bc, wc, *ss, seed, l)
 	if err != nil {
 		return nil, err
 	}
@@ -96,10 +103,11 @@ func NewSatellite(ac autopilotClient, bc busClient, dir string, seed types.Priva
 }
 
 // New returns a new Satellite.
-func New(ac autopilotClient, bc busClient, ss jsonStore, seed types.PrivateKey, l *zap.Logger) (*Satellite, error) {
+func New(ac autopilotClient, bc busClient, wc workerClient, ss jsonStore, seed types.PrivateKey, l *zap.Logger) (*Satellite, error) {
 	s := &Satellite{
 		ap:         ac,
 		bus:        bc,
+		worker:     wc,
 		store:      ss,
 		renterKey:  deriveRenterKey(blake2b.Sum256(append([]byte("worker"), seed...))),
 		accountKey: deriveAccountKey(blake2b.Sum256(append([]byte("worker"), seed...))),
@@ -128,11 +136,26 @@ func (s *Satellite) configHandlerPUT(jc jape.Context) {
 	if jc.Decode(&sc) != nil {
 		return
 	}
+
+	// Opt out of all features before disabling or changing satellite.
+	cfg := s.store.getConfig()
+	if cfg.Enabled && (!sc.Enabled || cfg.PublicKey != sc.PublicKey) {
+		ctx := jc.Request.Context()
+		StaticSatellite.UpdateSettings(ctx, RenterSettings{})
+	}
+
 	if jc.Check("failed to set config", s.store.setConfig(sc)) != nil {
 		return
 	}
-	if sc.Enabled {
-		s.requestContractsHandler(jc)
+
+	// Exchange contracts with the satellite if it was enabled or changed.
+	if sc.Enabled && (!cfg.Enabled || cfg.PublicKey != sc.PublicKey) {
+		go func() {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			StaticSatellite.ShareContracts(ctx)
+			StaticSatellite.RequestContracts(ctx)
+		}()
 	}
 }
 

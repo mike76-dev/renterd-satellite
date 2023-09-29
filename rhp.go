@@ -1,8 +1,10 @@
 package satellite
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	rhpv2 "go.sia.tech/core/rhp/v2"
 	"go.sia.tech/core/types"
@@ -11,6 +13,12 @@ import (
 	"go.sia.tech/renterd/object"
 
 	"golang.org/x/crypto/blake2b"
+)
+
+const (
+	// timeoutHostRevision is the amount of time we wait to receive the latest
+	// revision from the host.
+	timeoutHostRevision = 15 * time.Second
 )
 
 var (
@@ -226,7 +234,7 @@ type updateSlabRequest struct {
 // shareRequest is used to send a set of contracts to the satellite.
 type shareRequest struct {
 	PubKey    types.PublicKey
-	Contracts []api.ContractMetadata
+	Contracts []api.Contract
 	Signature types.Signature
 }
 
@@ -548,19 +556,12 @@ func (s *Satellite) updateRevisionHandler(jc jape.Context) {
 		return
 	}
 
-	fcid := sur.Revision.ID()
-	spk, exists := s.store.satellite(fcid)
-	if !exists {
+	cfg := s.store.getConfig()
+	if !cfg.Enabled {
 		return
 	}
 
-	satellite, exists := s.store.getSatellite(spk)
-	if !exists {
-		jc.Check("ERROR", errors.New("unknown satellite"))
-		return
-	}
-
-	pk, sk := generateKeyPair(satellite.RenterSeed)
+	pk, sk := generateKeyPair(cfg.RenterSeed)
 
 	ur := updateRequest{
 		PubKey:      pk,
@@ -574,8 +575,8 @@ func (s *Satellite) updateRevisionHandler(jc jape.Context) {
 	ur.EncodeToWithoutSignature(h.E)
 	ur.Signature = sk.SignHash(h.Sum())
 
-	conn, err := dial(ctx, satellite.Address, satellite.PublicKey)
-	if jc.Check("could not connect to the host", err) != nil {
+	conn, err := dial(ctx, cfg.Address, cfg.PublicKey)
+	if jc.Check("could not connect to the satellite", err) != nil {
 		return
 	}
 
@@ -595,7 +596,7 @@ func (s *Satellite) updateRevisionHandler(jc jape.Context) {
 		}
 	}()
 
-	t, err := rhpv2.NewRenterTransport(conn, satellite.PublicKey)
+	t, err := rhpv2.NewRenterTransport(conn, cfg.PublicKey)
 	if jc.Check("could not create transport", err) != nil {
 		return
 	}
@@ -920,7 +921,34 @@ func (s *Satellite) settingsHandlerPOST(jc jape.Context) {
 		return t.WriteRequest(specifierUpdateSettings, &usr)
 	})
 
-	jc.Check("couldn't update settings", err)
+	if jc.Check("couldn't update settings", err) != nil {
+		return
+	}
+
+	// Transfer all file metadata if backups are enabled.
+	if settings.BackupFileMetadata {
+		s.transferMetadata(ctx)
+	}
+}
+
+// transferMetadata sends all file metadata to the satellite.
+func (s *Satellite) transferMetadata(ctx context.Context) {
+	resp, err := s.bus.Object(ctx, "")
+	if err != nil {
+		return
+	}
+	for _, entry := range resp.Entries {
+		resp, err := s.bus.Object(ctx, entry.Name)
+		if err != nil {
+			s.logger.Error(fmt.Sprintf("couldn't find object %s: %s", entry.Name, err))
+			continue
+		}
+		StaticSatellite.SaveMetadata(ctx, FileMetadata{
+			Key:   resp.Object.Key,
+			Path:  entry.Name,
+			Slabs: resp.Object.Slabs,
+		})
+	}
 }
 
 // saveMetadataHandler handles the POST /metadata requests.
@@ -988,7 +1016,7 @@ func (s *Satellite) requestMetadataHandler(jc jape.Context) {
 
 	pk, sk := generateKeyPair(cfg.RenterSeed)
 
-	_, entries, err := s.bus.Object(ctx, "")
+	resp, err := s.bus.Object(ctx, "")
 	if jc.Check("couldn't requests present objects", err) != nil {
 		return
 	}
@@ -996,7 +1024,7 @@ func (s *Satellite) requestMetadataHandler(jc jape.Context) {
 	rmr := requestMetadataRequest{
 		PubKey: pk,
 	}
-	for _, entry := range entries {
+	for _, entry := range resp.Entries {
 		rmr.PresentObjects = append(rmr.PresentObjects, entry.Name)
 	}
 
@@ -1043,7 +1071,7 @@ func (s *Satellite) requestMetadataHandler(jc jape.Context) {
 				used[ss.Host] = h2c[ss.Host]
 			}
 		}
-		_, _, err := s.bus.Object(ctx, fm.Path)
+		_, err := s.bus.Object(ctx, fm.Path)
 		if err == nil {
 			err = s.bus.DeleteObject(ctx, api.DefaultBucketName, fm.Path, false)
 			if err != nil {
@@ -1123,11 +1151,22 @@ func (s *Satellite) shareContractsHandler(jc jape.Context) {
 
 	pk, sk := generateKeyPair(cfg.RenterSeed)
 
-	contracts, err := s.bus.Contracts(ctx)
+	resp, err := s.worker.Contracts(ctx, timeoutHostRevision)
+	if err != nil {
+		s.logger.Error(fmt.Sprintf("couldn't fetch contracts: %s", err))
+		return
+	}
+	if resp.Error != "" {
+		s.logger.Error(resp.Error)
+	}
 
 	sr := shareRequest{
-		PubKey:    pk,
-		Contracts: contracts,
+		PubKey: pk,
+	}
+	for _, contract := range resp.Contracts {
+		if contract.Revision != nil {
+			sr.Contracts = append(sr.Contracts, contract)
+		}
 	}
 
 	h := types.NewHasher()
@@ -1142,7 +1181,8 @@ func (s *Satellite) shareContractsHandler(jc jape.Context) {
 
 		var resp rhpv2.RPCError
 		err = t.ReadResponse(&resp, 1024)
-		if jc.Check("could not read response", err) != nil {
+		if err != nil {
+			s.logger.Error(fmt.Sprintf("could not read response: %s", err))
 			return
 		}
 
@@ -1153,7 +1193,7 @@ func (s *Satellite) shareContractsHandler(jc jape.Context) {
 		return nil
 	})
 
-	if jc.Check("couldn't send contracts", err) != nil {
+	if err != nil {
 		s.logger.Error(fmt.Sprintf("couldn't send contracts: %s", err))
 	}
 }
