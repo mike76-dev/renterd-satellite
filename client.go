@@ -83,37 +83,6 @@ func (c *Client) SetConfig(cfg Config) error {
 	return c.c.PUT("/config", cfg)
 }
 
-// AddContract adds a contract to the store.
-func (c *Client) AddContract(fcid types.FileContractID, pk types.PublicKey) error {
-	car := ContractAddRequest{
-		FCID: fcid,
-		PK:   pk,
-	}
-	return c.c.PUT("/contract", &car)
-}
-
-// DeleteContract removes a contract from the store.
-func (c *Client) DeleteContract(fcid types.FileContractID) error {
-	return c.c.DELETE(fmt.Sprintf("/contract/%s", fcid))
-}
-
-// FindSatellite returns the public key of the satellite that formed the contract.
-func (c *Client) FindSatellite(fcid types.FileContractID) (pk types.PublicKey, err error) {
-	err = c.c.GET(fmt.Sprintf("/contract/%s", fcid), &pk)
-	return
-}
-
-// GetContracts returns all satellite contracts.
-func (c *Client) GetContracts() (contracts map[types.FileContractID]types.PublicKey, err error) {
-	err = c.c.GET("/contracts", &contracts)
-	return
-}
-
-// DeleteContracts deletes all satellite contracts.
-func (c *Client) DeleteContracts() error {
-	return c.c.DELETE("/contracts")
-}
-
 // AddSatellite adds a satellite to the store.
 func (c *Client) AddSatellite(si SatelliteInfo) error {
 	return c.c.PUT("/satellite", &si)
@@ -125,7 +94,7 @@ func (c *Client) GetSatellite(pk types.PublicKey) (si SatelliteInfo, err error) 
 	return
 }
 
-// GetContracts returns all satellite contracts.
+// GetSatellites returns all known satellites.
 func (c *Client) GetSatellites() (satellites map[types.PublicKey]SatelliteInfo, err error) {
 	err = c.c.GET("/satellites", &satellites)
 	return

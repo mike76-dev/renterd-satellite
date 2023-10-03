@@ -313,12 +313,12 @@ func (s *Satellite) requestContractsHandler(jc jape.Context) {
 		contracts = append(contracts, id)
 		var a api.ContractMetadata
 		if (ec.renewedFrom == types.FileContractID{}) {
-			a, err = s.bus.AddContract(ctx, ec.contract, ec.totalCost, ec.startHeight, cfg.PublicKey)
+			a, err = s.bus.AddContract(ctx, ec.contract, ec.totalCost, ec.startHeight)
 		} else {
-			a, err = s.bus.AddRenewedContract(ctx, ec.contract, ec.totalCost, ec.startHeight, ec.renewedFrom, cfg.PublicKey)
+			a, err = s.bus.AddRenewedContract(ctx, ec.contract, ec.totalCost, ec.startHeight, ec.renewedFrom)
 			if err != nil {
 				// there might be no old contract in the archive, add as a new contract
-				a, err = s.bus.AddContract(ctx, ec.contract, ec.totalCost, ec.startHeight, cfg.PublicKey)
+				a, err = s.bus.AddContract(ctx, ec.contract, ec.totalCost, ec.startHeight)
 			}
 		}
 		if jc.Check("couldn't add contract", err) != nil {
@@ -431,7 +431,7 @@ func (s *Satellite) formContractsHandler(jc jape.Context) {
 	for _, ec := range ecs.contracts {
 		id := ec.contract.ID()
 		contracts = append(contracts, id)
-		a, err := s.bus.AddContract(ctx, ec.contract, ec.totalCost, ec.startHeight, cfg.PublicKey)
+		a, err := s.bus.AddContract(ctx, ec.contract, ec.totalCost, ec.startHeight)
 		if jc.Check("couldn't add contract", err) != nil {
 			s.logger.Error(fmt.Sprintf("couldn't add contract: %s", err))
 			return
@@ -533,9 +533,9 @@ func (s *Satellite) renewContractsHandler(jc jape.Context) {
 		from, ok := renewedFrom[host]
 		var a api.ContractMetadata
 		if ok {
-			a, err = s.bus.AddRenewedContract(ctx, ec.contract, ec.totalCost, ec.startHeight, from, cfg.PublicKey)
+			a, err = s.bus.AddRenewedContract(ctx, ec.contract, ec.totalCost, ec.startHeight, from)
 		} else {
-			a, err = s.bus.AddContract(ctx, ec.contract, ec.totalCost, ec.startHeight, cfg.PublicKey)
+			a, err = s.bus.AddContract(ctx, ec.contract, ec.totalCost, ec.startHeight)
 		}
 		if jc.Check("couldn't add contract", err) != nil {
 			s.logger.Error(fmt.Sprintf("couldn't add contract: %s", err))
@@ -703,7 +703,7 @@ func (s *Satellite) formContractHandler(jc jape.Context) {
 
 	id := ec.contract.ID()
 	contracts = append(contracts, id)
-	added, err := s.bus.AddContract(ctx, ec.contract, ec.totalCost, ec.startHeight, cfg.PublicKey)
+	added, err := s.bus.AddContract(ctx, ec.contract, ec.totalCost, ec.startHeight)
 	if jc.Check("couldn't add contract", err) != nil {
 		s.logger.Error(fmt.Sprintf("couldn't add contract: %s", err))
 		return
@@ -809,7 +809,7 @@ func (s *Satellite) renewContractHandler(jc jape.Context) {
 		return
 	}
 
-	added, err := s.bus.AddRenewedContract(ctx, ec.contract, ec.totalCost, ec.startHeight, srr.Contract, cfg.PublicKey)
+	added, err := s.bus.AddRenewedContract(ctx, ec.contract, ec.totalCost, ec.startHeight, srr.Contract)
 	if jc.Check("couldn't add contract", err) != nil {
 		s.logger.Error(fmt.Sprintf("couldn't add contract: %s", err))
 		return

@@ -28,9 +28,9 @@ type autopilotClient interface {
 
 // busClient is the interface for renterd/bus.
 type busClient interface {
-	AddContract(ctx context.Context, contract rhpv2.ContractRevision, totalCost types.Currency, startHeight uint64, spk types.PublicKey) (api.ContractMetadata, error)
+	AddContract(ctx context.Context, contract rhpv2.ContractRevision, totalCost types.Currency, startHeight uint64) (api.ContractMetadata, error)
 	AddObject(ctx context.Context, bucket, path, contractSet string, o object.Object, usedContracts map[types.PublicKey]types.FileContractID) error
-	AddRenewedContract(ctx context.Context, contract rhpv2.ContractRevision, totalCost types.Currency, startHeight uint64, renewedFrom types.FileContractID, spk types.PublicKey) (api.ContractMetadata, error)
+	AddRenewedContract(ctx context.Context, contract rhpv2.ContractRevision, totalCost types.Currency, startHeight uint64, renewedFrom types.FileContractID) (api.ContractMetadata, error)
 	Contract(ctx context.Context, id types.FileContractID) (api.ContractMetadata, error)
 	Contracts(ctx context.Context) ([]api.ContractMetadata, error)
 	ContractSetContracts(ctx context.Context, set string) (contracts []api.ContractMetadata, err error)
@@ -159,50 +159,6 @@ func (s *Satellite) configHandlerPUT(jc jape.Context) {
 	}
 }
 
-// contractHandlerPUT handles the PUT /contract request.
-func (s *Satellite) contractHandlerPUT(jc jape.Context) {
-	var car ContractAddRequest
-	if jc.Decode(&car) != nil {
-		return
-	}
-	jc.Check("failed to add contract to the store", s.store.addContract(car.FCID, car.PK))
-}
-
-// contractHandlerDELETE handles the DELETE /contract request.
-func (s *Satellite) contractHandlerDELETE(jc jape.Context) {
-	var id types.FileContractID
-	if jc.DecodeParam("id", &id) != nil {
-		return
-	}
-	jc.Check("failed to delete contract from the store", s.store.deleteContract(id))
-}
-
-// contractHandlerGET handles the GET /contract requests.
-func (s *Satellite) contractHandlerGET(jc jape.Context) {
-	var id types.FileContractID
-	if jc.DecodeParam("id", &id) != nil {
-		return
-	}
-	pk, exists := s.store.satellite(id)
-	if !exists {
-		pk = types.PublicKey{}
-	}
-	jc.Encode(pk)
-}
-
-// contractsHandlerGET handles the GET /contracts requests.
-func (s *Satellite) contractsHandlerGET(jc jape.Context) {
-	c := ContractsAllResponse{
-		Contracts: s.store.getContracts(),
-	}
-	jc.Encode(c)
-}
-
-// contractsHandlerDELETE handles the DELETE /contracts requests.
-func (s *Satellite) contractsHandlerDELETE(jc jape.Context) {
-	s.store.deleteAll()
-}
-
 // satelliteHandlerPUT handles the PUT /satellite request.
 func (s *Satellite) satelliteHandlerPUT(jc jape.Context) {
 	var si SatelliteInfo
@@ -244,11 +200,6 @@ func (s *Satellite) Handler() http.Handler {
 		"POST   /update":        s.updateRevisionHandler,
 		"GET    /config":        s.configHandlerGET,
 		"PUT    /config":        s.configHandlerPUT,
-		"PUT    /contract":      s.contractHandlerPUT,
-		"DELETE /contract/:id":  s.contractHandlerDELETE,
-		"GET    /contract/:id":  s.contractHandlerGET,
-		"GET    /contracts":     s.contractsHandlerGET,
-		"DELETE /contracts":     s.contractsHandlerDELETE,
 		"PUT    /satellite":     s.satelliteHandlerPUT,
 		"GET    /satellite/:id": s.satelliteHandlerGET,
 		"GET    /satellites":    s.satellitesHandlerGET,

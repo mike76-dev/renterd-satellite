@@ -15,7 +15,6 @@ import (
 type ephemeralStore struct {
 	mu         sync.Mutex
 	config     Config
-	contracts  map[types.FileContractID]types.PublicKey
 	satellites map[types.PublicKey]SatelliteInfo
 }
 
@@ -39,47 +38,6 @@ func (s *ephemeralStore) setConfig(c Config) error {
 			RenterSeed: c.RenterSeed,
 		})
 	}
-	return nil
-}
-
-// contracts returns the map of the satellite contracts.
-func (s *ephemeralStore) getContracts() map[types.FileContractID]types.PublicKey {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.contracts
-}
-
-// satellite returns the satellite public key of the given contract.
-func (s *ephemeralStore) satellite(fcid types.FileContractID) (types.PublicKey, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	pk, exists := s.contracts[fcid]
-	return pk, exists
-}
-
-// addContract adds a new contract to the map.
-func (s *ephemeralStore) addContract(fcid types.FileContractID, pk types.PublicKey) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.contracts[fcid] = pk
-	return nil
-}
-
-// deleteContract deletes a contract from the map.
-func (s *ephemeralStore) deleteContract(fcid types.FileContractID) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, exists := s.contracts[fcid]; exists {
-		delete(s.contracts, fcid)
-	}
-	return nil
-}
-
-// deleteAll clears the contracts map.
-func (s *ephemeralStore) deleteAll() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.contracts = make(map[types.FileContractID]types.PublicKey)
 	return nil
 }
 
@@ -115,7 +73,6 @@ func (s *ephemeralStore) ProcessConsensusChange(cc modules.ConsensusChange) {
 // newEphemeralStore returns a new EphemeralStore.
 func newEphemeralStore() *ephemeralStore {
 	return &ephemeralStore{
-		contracts:  make(map[types.FileContractID]types.PublicKey),
 		satellites: make(map[types.PublicKey]SatelliteInfo),
 	}
 }
@@ -128,9 +85,8 @@ type jsonStore struct {
 }
 
 type jsonPersistData struct {
-	Config     Config                                   `json:"config"`
-	Contracts  map[types.FileContractID]types.PublicKey `json:"contracts"`
-	Satellites map[types.PublicKey]SatelliteInfo        `json:"satellites"`
+	Config     Config                            `json:"config"`
+	Satellites map[types.PublicKey]SatelliteInfo `json:"satellites"`
 }
 
 func (s *jsonStore) save() error {
@@ -138,7 +94,6 @@ func (s *jsonStore) save() error {
 	defer s.mu.Unlock()
 	var p jsonPersistData
 	p.Config = s.config
-	p.Contracts = s.contracts
 	p.Satellites = s.satellites
 	js, _ := json.MarshalIndent(p, "", "  ")
 
@@ -171,7 +126,6 @@ func (s *jsonStore) load() error {
 		return err
 	}
 	s.config = p.Config
-	s.contracts = p.Contracts
 	s.satellites = p.Satellites
 	return nil
 }
@@ -179,24 +133,6 @@ func (s *jsonStore) load() error {
 // setConfig updates the satellite config.
 func (s *jsonStore) setConfig(c Config) error {
 	s.ephemeralStore.setConfig(c)
-	return s.save()
-}
-
-// addContract adds a new contract to the map.
-func (s *jsonStore) addContract(fcid types.FileContractID, pk types.PublicKey) error {
-	s.ephemeralStore.addContract(fcid, pk)
-	return s.save()
-}
-
-// deleteContract deletes a contract from the map.
-func (s *jsonStore) deleteContract(fcid types.FileContractID) error {
-	s.ephemeralStore.deleteContract(fcid)
-	return s.save()
-}
-
-// deleteAll clears the contracts map.
-func (s *jsonStore) deleteAll() error {
-	s.ephemeralStore.deleteAll()
 	return s.save()
 }
 

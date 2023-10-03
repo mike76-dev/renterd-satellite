@@ -35,17 +35,6 @@ type UpdateRevisionRequest struct {
 	Spending api.ContractSpending   `json:"spending"`
 }
 
-// ContractAddRequest is the request type for the /contract request.
-type ContractAddRequest struct {
-	FCID types.FileContractID `json:"id"`
-	PK   types.PublicKey      `json:"publickey"`
-}
-
-// ContractsAllResponse is the response type for the /all request.
-type ContractsAllResponse struct {
-	Contracts map[types.FileContractID]types.PublicKey `json:"contracts"`
-}
-
 // Config contains the satellite configuration parameters.
 type Config struct {
 	Enabled bool `json:"enabled"`
