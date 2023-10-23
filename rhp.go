@@ -882,6 +882,11 @@ func (s *Satellite) settingsHandlerPOST(jc jape.Context) {
 		return
 	}
 
+	rs, err := StaticSatellite.GetSettings(ctx)
+	if jc.Check("could not retrieve current settings", err) != nil {
+		return
+	}
+
 	pk, sk := generateKeyPair(cfg.RenterSeed)
 
 	usr := updateSettingsRequest{
@@ -926,7 +931,7 @@ func (s *Satellite) settingsHandlerPOST(jc jape.Context) {
 	}
 
 	// Transfer all file metadata if backups are enabled.
-	if settings.BackupFileMetadata {
+	if settings.BackupFileMetadata && !rs.BackupFileMetadata {
 		s.transferMetadata(ctx)
 	}
 }
