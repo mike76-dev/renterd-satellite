@@ -39,11 +39,13 @@ type UpdateRevisionRequest struct {
 type Config struct {
 	Enabled bool `json:"enabled"`
 	SatelliteInfo
+	EncryptionKey object.EncryptionKey `json:"encryptionKey"`
 }
 
 // SatelliteInfo contains the information about the satellite.
 type SatelliteInfo struct {
 	Address    string          `json:"address"`
+	MuxPort    string          `json:"muxPort"`
 	PublicKey  types.PublicKey `json:"publicKey"`
 	RenterSeed []byte          `json:"renterSeed"`
 }
@@ -78,16 +80,19 @@ type RenterSettings struct {
 	AutoRenewContracts bool `json:"autoRenew"`
 	BackupFileMetadata bool `json:"backupMetadata"`
 	AutoRepairFiles    bool `json:"autoRepair"`
+	ProxyUploads       bool `json:"proxyUploads"`
 }
 
 // FileMetadata contains the uploaded file metadata.
 type FileMetadata struct {
-	Key      object.EncryptionKey `json:"key"`
-	Bucket   string               `json:"bucket"`
-	Path     string               `json:"path"`
-	ETag     string               `json:"etag"`
-	MimeType string               `json:"mime"`
-	Slabs    []object.SlabSlice   `json:"slabs"`
+	Key          object.EncryptionKey `json:"key"`
+	Bucket       string               `json:"bucket"`
+	Path         string               `json:"path"`
+	ETag         string               `json:"etag"`
+	MimeType     string               `json:"mime"`
+	Slabs        []object.SlabSlice   `json:"slabs"`
+	PartialSlabs []object.PartialSlab `json:"partialSlabs"`
+	Data         []byte               `json:"data"`
 }
 
 // SaveMetadataRequest is the request type for the SaveMetadata RPC.
@@ -97,7 +102,8 @@ type SaveMetadataRequest struct {
 
 // UpdateSlabRequest is the request type for the UpdateSlab RPC.
 type UpdateSlabRequest struct {
-	Slab object.Slab `json:"slab"`
+	Slab   object.Slab `json:"slab"`
+	Packed bool        `json:"packed"`
 }
 
 // BucketFiles contains a list of filepaths within a single bucket.

@@ -1,12 +1,20 @@
 package satellite
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"mime"
+	"net"
+	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/gabriel-vasile/mimetype"
 	rhpv2 "go.sia.tech/core/rhp/v2"
+	rhpv3 "go.sia.tech/core/rhp/v3"
 	"go.sia.tech/core/types"
 	"go.sia.tech/jape"
 	"go.sia.tech/renterd/api"
@@ -19,6 +27,10 @@ const (
 	// timeoutHostRevision is the amount of time we wait to receive the latest
 	// revision from the host.
 	timeoutHostRevision = 15 * time.Second
+
+	// metadataRequestMaxSize should be high enough to allow uploading or
+	// downloading a partial slab.
+	metadataRequestMaxSize = 1e9
 )
 
 var (
@@ -33,210 +45,10 @@ var (
 	specifierSaveMetadata     = types.NewSpecifier("SaveMetadata")
 	specifierRequestMetadata  = types.NewSpecifier("RequestMetadata")
 	specifierUpdateSlab       = types.NewSpecifier("UpdateSlab")
+	specifierRequestSlabs     = types.NewSpecifier("RequestSlabs")
 	specifierShareContracts   = types.NewSpecifier("ShareContracts")
+	specifierUploadFile       = types.NewSpecifier("UploadFile")
 )
-
-// requestRequest is used to request existing contracts.
-type requestRequest struct {
-	PubKey    types.PublicKey
-	Signature types.Signature
-}
-
-// formRequest is used to request contract formation.
-type formRequest struct {
-	PubKey      types.PublicKey
-	SecretKey   types.PrivateKey
-	Hosts       uint64
-	Period      uint64
-	RenewWindow uint64
-
-	Storage  uint64
-	Upload   uint64
-	Download uint64
-
-	MinShards   uint64
-	TotalShards uint64
-
-	MaxRPCPrice          types.Currency
-	MaxContractPrice     types.Currency
-	MaxDownloadPrice     types.Currency
-	MaxUploadPrice       types.Currency
-	MaxStoragePrice      types.Currency
-	MaxSectorAccessPrice types.Currency
-	MinMaxCollateral     types.Currency
-	BlockHeightLeeway    uint64
-
-	Signature types.Signature
-}
-
-// formContractRequest is used to request contract formation using
-// the new Renter-Satellite protocol.
-type formContractRequest struct {
-	PubKey    types.PublicKey
-	RenterKey types.PublicKey
-	HostKey   types.PublicKey
-	EndHeight uint64
-
-	Storage  uint64
-	Upload   uint64
-	Download uint64
-
-	MinShards   uint64
-	TotalShards uint64
-
-	Signature types.Signature
-}
-
-// renewRequest is used to request contract renewal.
-type renewRequest struct {
-	PubKey      types.PublicKey
-	SecretKey   types.PrivateKey
-	Contracts   []types.FileContractID
-	Period      uint64
-	RenewWindow uint64
-
-	Storage  uint64
-	Upload   uint64
-	Download uint64
-
-	MinShards   uint64
-	TotalShards uint64
-
-	MaxRPCPrice          types.Currency
-	MaxContractPrice     types.Currency
-	MaxDownloadPrice     types.Currency
-	MaxUploadPrice       types.Currency
-	MaxStoragePrice      types.Currency
-	MaxSectorAccessPrice types.Currency
-	MinMaxCollateral     types.Currency
-	BlockHeightLeeway    uint64
-
-	Signature types.Signature
-}
-
-// renewContractRequest is used to request contract renewal using
-// the new Renter-Satellite protocol.
-type renewContractRequest struct {
-	PubKey    types.PublicKey
-	Contract  types.FileContractID
-	EndHeight uint64
-
-	Storage  uint64
-	Upload   uint64
-	Download uint64
-
-	MinShards   uint64
-	TotalShards uint64
-
-	Signature types.Signature
-}
-
-// revisionHash is used to read the revision hash provided by the
-// satellite.
-type revisionHash struct {
-	RevisionHash types.Hash256
-}
-
-// renterSignature is used to send the revision signature to the
-// satellite.
-type renterSignature struct {
-	Signature types.Signature
-}
-
-// updateRequest is used to send a new revision.
-type updateRequest struct {
-	PubKey      types.PublicKey
-	Contract    rhpv2.ContractRevision
-	Uploads     types.Currency
-	Downloads   types.Currency
-	FundAccount types.Currency
-	Signature   types.Signature
-}
-
-// extendedContract contains the contract and its metadata.
-type extendedContract struct {
-	contract            rhpv2.ContractRevision
-	startHeight         uint64
-	totalCost           types.Currency
-	uploadSpending      types.Currency
-	downloadSpending    types.Currency
-	fundAccountSpending types.Currency
-	renewedFrom         types.FileContractID
-}
-
-// extendedContractSet is a collection of extendedContracts.
-type extendedContractSet struct {
-	contracts []extendedContract
-}
-
-// getSettingsRequest is used to retrieve the renter's opt-in settings.
-type getSettingsRequest struct {
-	PubKey    types.PublicKey
-	Signature types.Signature
-}
-
-// updateSettingsRequest is used to update the renter's opt-in settings.
-type updateSettingsRequest struct {
-	PubKey             types.PublicKey
-	AutoRenewContracts bool
-	BackupFileMetadata bool
-	AutoRepairFiles    bool
-	SecretKey          types.PrivateKey
-	AccountKey         types.PrivateKey
-
-	Hosts       uint64
-	Period      uint64
-	RenewWindow uint64
-	Storage     uint64
-	Upload      uint64
-	Download    uint64
-	MinShards   uint64
-	TotalShards uint64
-
-	MaxRPCPrice          types.Currency
-	MaxContractPrice     types.Currency
-	MaxDownloadPrice     types.Currency
-	MaxUploadPrice       types.Currency
-	MaxStoragePrice      types.Currency
-	MaxSectorAccessPrice types.Currency
-	MinMaxCollateral     types.Currency
-	BlockHeightLeeway    uint64
-
-	Signature types.Signature
-}
-
-// saveMetadataRequest is used to save file metadata on the satellite.
-type saveMetadataRequest struct {
-	PubKey    types.PublicKey
-	Metadata  FileMetadata
-	Signature types.Signature
-}
-
-// renterFiles is a collection of FileMetadata.
-type renterFiles struct {
-	metadata []FileMetadata
-}
-
-// requestMetadataRequest is used to request file metadata.
-type requestMetadataRequest struct {
-	PubKey         types.PublicKey
-	PresentObjects []BucketFiles
-	Signature      types.Signature
-}
-
-// updateSlabRequest is used to update a slab after a successful migration.
-type updateSlabRequest struct {
-	PubKey    types.PublicKey
-	Slab      object.SlabSlice
-	Signature types.Signature
-}
-
-// shareRequest is used to send a set of contracts to the satellite.
-type shareRequest struct {
-	PubKey    types.PublicKey
-	Contracts []api.Contract
-	Signature types.Signature
-}
 
 // generateKeyPair generates the keypair from a given seed.
 func generateKeyPair(seed []byte) (types.PublicKey, types.PrivateKey) {
@@ -277,7 +89,7 @@ func (s *Satellite) requestContractsHandler(jc jape.Context) {
 	rr.Signature = sk.SignHash(h.Sum())
 
 	var ecs extendedContractSet
-	err := s.withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
+	err := withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
 		if err := t.WriteRequest(specifierRequestContracts, &rr); err != nil {
 			return err
 		}
@@ -313,12 +125,12 @@ func (s *Satellite) requestContractsHandler(jc jape.Context) {
 		contracts = append(contracts, id)
 		var a api.ContractMetadata
 		if (ec.renewedFrom == types.FileContractID{}) {
-			a, err = s.bus.AddContract(ctx, ec.contract, ec.totalCost, ec.startHeight)
+			a, err = s.bus.AddContract(ctx, ec.contract, ec.contractPrice, ec.totalCost, ec.startHeight, api.ContractStateActive)
 		} else {
-			a, err = s.bus.AddRenewedContract(ctx, ec.contract, ec.totalCost, ec.startHeight, ec.renewedFrom)
+			a, err = s.bus.AddRenewedContract(ctx, ec.contract, ec.contractPrice, ec.totalCost, ec.startHeight, ec.renewedFrom, api.ContractStateActive)
 			if err != nil {
 				// there might be no old contract in the archive, add as a new contract
-				a, err = s.bus.AddContract(ctx, ec.contract, ec.totalCost, ec.startHeight)
+				a, err = s.bus.AddContract(ctx, ec.contract, ec.contractPrice, ec.totalCost, ec.startHeight, api.ContractStateActive)
 			}
 		}
 		if jc.Check("couldn't add contract", err) != nil {
@@ -370,6 +182,11 @@ func (s *Satellite) formContractsHandler(jc jape.Context) {
 		return
 	}
 
+	ups, err := s.bus.UploadPackingSettings(ctx)
+	if jc.Check("could not get upload packing settings", err) != nil {
+		return
+	}
+
 	pk, sk := generateKeyPair(cfg.RenterSeed)
 
 	fr := formRequest{
@@ -394,6 +211,8 @@ func (s *Satellite) formContractsHandler(jc jape.Context) {
 		MaxSectorAccessPrice: gp.GougingSettings.MaxRPCPrice.Mul64(10),
 		MinMaxCollateral:     gp.GougingSettings.MinMaxCollateral,
 		BlockHeightLeeway:    uint64(gp.GougingSettings.HostBlockHeightLeeway),
+
+		UploadPacking: ups.Enabled,
 	}
 
 	s.logger.Debug(fmt.Sprintf("trying to form %v contracts", fr.Hosts))
@@ -403,7 +222,7 @@ func (s *Satellite) formContractsHandler(jc jape.Context) {
 	fr.Signature = sk.SignHash(h.Sum())
 
 	var ecs extendedContractSet
-	err = s.withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
+	err = withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
 		if err := t.WriteRequest(specifierFormContracts, &fr); err != nil {
 			return err
 		}
@@ -431,7 +250,7 @@ func (s *Satellite) formContractsHandler(jc jape.Context) {
 	for _, ec := range ecs.contracts {
 		id := ec.contract.ID()
 		contracts = append(contracts, id)
-		a, err := s.bus.AddContract(ctx, ec.contract, ec.totalCost, ec.startHeight)
+		a, err := s.bus.AddContract(ctx, ec.contract, ec.contractPrice, ec.totalCost, ec.startHeight, api.ContractStateActive)
 		if jc.Check("couldn't add contract", err) != nil {
 			s.logger.Error(fmt.Sprintf("couldn't add contract: %s", err))
 			return
@@ -476,6 +295,11 @@ func (s *Satellite) renewContractsHandler(jc jape.Context) {
 		return
 	}
 
+	ups, err := s.bus.UploadPackingSettings(ctx)
+	if jc.Check("could not get upload packing settings", err) != nil {
+		return
+	}
+
 	pk, sk := generateKeyPair(cfg.RenterSeed)
 
 	rr := renewRequest{
@@ -500,6 +324,8 @@ func (s *Satellite) renewContractsHandler(jc jape.Context) {
 		MaxSectorAccessPrice: gp.GougingSettings.MaxRPCPrice.Mul64(10),
 		MinMaxCollateral:     gp.GougingSettings.MinMaxCollateral,
 		BlockHeightLeeway:    uint64(gp.GougingSettings.HostBlockHeightLeeway),
+
+		UploadPacking: ups.Enabled,
 	}
 
 	s.logger.Debug(fmt.Sprintf("trying to renew %v contracts", len(rr.Contracts)))
@@ -509,7 +335,7 @@ func (s *Satellite) renewContractsHandler(jc jape.Context) {
 	rr.Signature = sk.SignHash(h.Sum())
 
 	var ecs extendedContractSet
-	err = s.withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
+	err = withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
 		if err := t.WriteRequest(specifierRenewContracts, &rr); err != nil {
 			return err
 		}
@@ -533,9 +359,9 @@ func (s *Satellite) renewContractsHandler(jc jape.Context) {
 		from, ok := renewedFrom[host]
 		var a api.ContractMetadata
 		if ok {
-			a, err = s.bus.AddRenewedContract(ctx, ec.contract, ec.totalCost, ec.startHeight, from)
+			a, err = s.bus.AddRenewedContract(ctx, ec.contract, ec.contractPrice, ec.totalCost, ec.startHeight, from, api.ContractStateActive)
 		} else {
-			a, err = s.bus.AddContract(ctx, ec.contract, ec.totalCost, ec.startHeight)
+			a, err = s.bus.AddContract(ctx, ec.contract, ec.contractPrice, ec.totalCost, ec.startHeight, api.ContractStateActive)
 		}
 		if jc.Check("couldn't add contract", err) != nil {
 			s.logger.Error(fmt.Sprintf("couldn't add contract: %s", err))
@@ -575,7 +401,7 @@ func (s *Satellite) updateRevisionHandler(jc jape.Context) {
 	ur.EncodeToWithoutSignature(h.E)
 	ur.Signature = sk.SignHash(h.Sum())
 
-	conn, err := dial(ctx, cfg.Address, cfg.PublicKey)
+	conn, err := dial(ctx, cfg.Address)
 	if jc.Check("could not connect to the satellite", err) != nil {
 		return
 	}
@@ -661,7 +487,7 @@ func (s *Satellite) formContractHandler(jc jape.Context) {
 	fcr.Signature = sk.SignHash(h.Sum())
 
 	var ec extendedContract
-	err = s.withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
+	err = withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
 		// Write the FormContract request.
 		if err := t.WriteRequest(specifierFormContract, &fcr); err != nil {
 			return err
@@ -703,7 +529,7 @@ func (s *Satellite) formContractHandler(jc jape.Context) {
 
 	id := ec.contract.ID()
 	contracts = append(contracts, id)
-	added, err := s.bus.AddContract(ctx, ec.contract, ec.totalCost, ec.startHeight)
+	added, err := s.bus.AddContract(ctx, ec.contract, ec.contractPrice, ec.totalCost, ec.startHeight, api.ContractStateActive)
 	if jc.Check("couldn't add contract", err) != nil {
 		s.logger.Error(fmt.Sprintf("couldn't add contract: %s", err))
 		return
@@ -766,7 +592,7 @@ func (s *Satellite) renewContractHandler(jc jape.Context) {
 	rcr.Signature = sk.SignHash(h.Sum())
 
 	var ec extendedContract
-	err = s.withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
+	err = withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
 		if err := t.WriteRequest(specifierRenewContract, &rcr); err != nil {
 			return err
 		}
@@ -809,7 +635,7 @@ func (s *Satellite) renewContractHandler(jc jape.Context) {
 		return
 	}
 
-	added, err := s.bus.AddRenewedContract(ctx, ec.contract, ec.totalCost, ec.startHeight, srr.Contract)
+	added, err := s.bus.AddRenewedContract(ctx, ec.contract, ec.contractPrice, ec.totalCost, ec.startHeight, srr.Contract, api.ContractStateActive)
 	if jc.Check("couldn't add contract", err) != nil {
 		s.logger.Error(fmt.Sprintf("couldn't add contract: %s", err))
 		return
@@ -840,7 +666,7 @@ func (s *Satellite) settingsHandlerGET(jc jape.Context) {
 	gsr.EncodeToWithoutSignature(h.E)
 	gsr.Signature = sk.SignHash(h.Sum())
 
-	err := s.withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
+	err := withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
 		if err := t.WriteRequest(specifierGetSettings, &gsr); err != nil {
 			return err
 		}
@@ -877,6 +703,11 @@ func (s *Satellite) settingsHandlerPOST(jc jape.Context) {
 		return
 	}
 
+	ups, err := s.bus.UploadPackingSettings(ctx)
+	if jc.Check("could not get upload packing settings", err) != nil {
+		return
+	}
+
 	ac, err := s.ap.Config()
 	if jc.Check("could not get autopilot config", err) != nil {
 		return
@@ -894,6 +725,7 @@ func (s *Satellite) settingsHandlerPOST(jc jape.Context) {
 		AutoRenewContracts: settings.AutoRenewContracts,
 		BackupFileMetadata: settings.BackupFileMetadata,
 		AutoRepairFiles:    settings.AutoRepairFiles,
+		ProxyUploads:       settings.ProxyUploads,
 		SecretKey:          s.renterKey,
 		AccountKey:         s.accountKey,
 
@@ -916,13 +748,15 @@ func (s *Satellite) settingsHandlerPOST(jc jape.Context) {
 		MaxSectorAccessPrice: gp.GougingSettings.MaxRPCPrice.Mul64(10),
 		MinMaxCollateral:     gp.GougingSettings.MinMaxCollateral,
 		BlockHeightLeeway:    uint64(gp.GougingSettings.HostBlockHeightLeeway),
+
+		UploadPacking: ups.Enabled,
 	}
 
 	h := types.NewHasher()
 	usr.EncodeToWithoutSignature(h.E)
 	usr.Signature = sk.SignHash(h.Sum())
 
-	err = s.withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
+	err = withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
 		return t.WriteRequest(specifierUpdateSettings, &usr)
 	})
 
@@ -957,13 +791,36 @@ func (s *Satellite) transferMetadata(ctx context.Context) {
 				s.logger.Error(fmt.Sprintf("couldn't find object %s: %s", entry.Name, err))
 				continue
 			}
+			var data []byte
+			if len(resp.Object.PartialSlabs) > 0 {
+				ps := resp.Object.PartialSlabs[0]
+				data, err = s.bus.FetchPartialSlab(ctx, ps.Key, ps.Offset, ps.Length)
+				if err != nil && strings.Contains(err.Error(), api.ErrObjectNotFound.Error()) {
+					// Check if the slab was already uploaded.
+					slab, err := s.bus.Slab(ctx, ps.Key)
+					if err != nil {
+						s.logger.Error(fmt.Sprintf("failed to fetch uploaded partial slab: %v", err))
+						continue
+					}
+					resp.Object.Slabs = append(resp.Object.Slabs, object.SlabSlice{
+						Slab:   slab,
+						Offset: ps.Offset,
+						Length: ps.Length,
+					})
+				} else if err != nil {
+					s.logger.Error(fmt.Sprintf("failed to fetch partial slab: %v", err))
+					continue
+				}
+			}
 			StaticSatellite.SaveMetadata(ctx, FileMetadata{
-				Key:      resp.Object.Key,
-				Bucket:   bucket.Name,
-				Path:     entry.Name,
-				ETag:     resp.Object.ETag,
-				MimeType: resp.Object.MimeType,
-				Slabs:    resp.Object.Slabs,
+				Key:          resp.Object.Key,
+				Bucket:       bucket.Name,
+				Path:         entry.Name,
+				ETag:         resp.Object.ETag,
+				MimeType:     resp.Object.MimeType,
+				Slabs:        resp.Object.Slabs,
+				PartialSlabs: resp.Object.PartialSlabs,
+				Data:         data,
 			})
 		}
 	}
@@ -983,16 +840,40 @@ func (s *Satellite) saveMetadataHandler(jc jape.Context) {
 
 	pk, sk := generateKeyPair(cfg.RenterSeed)
 
+	encryptedBucket, err := encodeString(cfg.EncryptionKey, fmr.Metadata.Bucket)
+	if jc.Check("couldn't encode bucket", err) != nil {
+		return
+	}
+
+	encryptedPath, err := encodeString(cfg.EncryptionKey, fmr.Metadata.Path)
+	if jc.Check("couldn't encode path", err) != nil {
+		return
+	}
+
+	encryptedMimeType, err := encodeString(cfg.EncryptionKey, fmr.Metadata.MimeType)
+	if jc.Check("couldn't encode MIME type", err) != nil {
+		return
+	}
+
 	smr := saveMetadataRequest{
-		PubKey:   pk,
-		Metadata: fmr.Metadata,
+		PubKey: pk,
+		Metadata: encodedFileMetadata{
+			Key:          fmr.Metadata.Key,
+			Bucket:       encryptedBucket,
+			Path:         encryptedPath,
+			ETag:         fmr.Metadata.ETag,
+			MimeType:     encryptedMimeType,
+			Slabs:        fmr.Metadata.Slabs,
+			PartialSlabs: fmr.Metadata.PartialSlabs,
+			Data:         fmr.Metadata.Data,
+		},
 	}
 
 	h := types.NewHasher()
 	smr.EncodeToWithoutSignature(h.E)
 	smr.Signature = sk.SignHash(h.Sum())
 
-	err := s.withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
+	err = withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
 		err = t.WriteRequest(specifierSaveMetadata, &smr)
 		if err != nil {
 			return
@@ -1029,8 +910,14 @@ func (s *Satellite) requestMetadataHandler(jc jape.Context) {
 		jc.Check("ERROR", errors.New("contract set cannot be empty"))
 		return
 	}
+
 	s.logger.Info("requesting file metadata from the satellite")
 	ctx := jc.Request.Context()
+
+	gp, err := s.bus.GougingParams(ctx)
+	if jc.Check("could not get gouging parameters", err) != nil {
+		return
+	}
 
 	pk, sk := generateKeyPair(cfg.RenterSeed)
 	rmr := requestMetadataRequest{
@@ -1048,11 +935,19 @@ func (s *Satellite) requestMetadataHandler(jc jape.Context) {
 		if jc.Check("couldn't requests present objects", err) != nil {
 			return
 		}
-		bf := BucketFiles{
-			Name: bucket.Name,
+		encryptedBucket, err := encodeString(cfg.EncryptionKey, bucket.Name)
+		if jc.Check("couldn't encode bucket", err) != nil {
+			return
+		}
+		bf := encodedBucketFiles{
+			Name: encryptedBucket,
 		}
 		for _, entry := range resp.Objects {
-			bf.Paths = append(bf.Paths, entry.Name)
+			encryptedPath, err := encodeString(cfg.EncryptionKey, entry.Name)
+			if jc.Check("couldn't encode path", err) != nil {
+				return
+			}
+			bf.Paths = append(bf.Paths, encryptedPath)
 		}
 		rmr.PresentObjects = append(rmr.PresentObjects, bf)
 	}
@@ -1062,12 +957,12 @@ func (s *Satellite) requestMetadataHandler(jc jape.Context) {
 	rmr.Signature = sk.SignHash(h.Sum())
 
 	var rf renterFiles
-	err = s.withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
+	err = withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
 		if err := t.WriteRequest(specifierRequestMetadata, &rmr); err != nil {
 			return err
 		}
 
-		if err := t.ReadResponse(&rf, 65536); err != nil {
+		if err := t.ReadResponse(&rf, metadataRequestMaxSize); err != nil {
 			return err
 		}
 
@@ -1087,8 +982,9 @@ func (s *Satellite) requestMetadataHandler(jc jape.Context) {
 	var objects []object.Object
 	for _, fm := range rf.metadata {
 		obj := object.Object{
-			Key:   fm.Key,
-			Slabs: fm.Slabs,
+			Key:          fm.Key,
+			Slabs:        fm.Slabs,
+			PartialSlabs: fm.PartialSlabs,
 		}
 		h2c := make(map[types.PublicKey]types.FileContractID)
 		for _, c := range contracts {
@@ -1097,28 +993,70 @@ func (s *Satellite) requestMetadataHandler(jc jape.Context) {
 		used := make(map[types.PublicKey]types.FileContractID)
 		for _, s := range obj.Slabs {
 			for _, ss := range s.Shards {
-				used[ss.Host] = h2c[ss.Host]
+				used[ss.LatestHost] = h2c[ss.LatestHost]
 			}
 		}
-		_, err := s.bus.Bucket(ctx, fm.Bucket)
+		bucket, err := decodeString(cfg.EncryptionKey, fm.Bucket)
 		if err != nil {
-			err = s.bus.CreateBucket(ctx, fm.Bucket, api.CreateBucketOptions{})
+			s.logger.Error(fmt.Sprintf("couldn't decode bucket: %s", err))
+			continue
+		}
+		path, err := decodeString(cfg.EncryptionKey, fm.Path)
+		if err != nil {
+			s.logger.Error(fmt.Sprintf("couldn't decode path: %s", err))
+			continue
+		}
+		mimeType, err := decodeString(cfg.EncryptionKey, fm.MimeType)
+		if err != nil {
+			s.logger.Error(fmt.Sprintf("couldn't decode MIME type: %s", err))
+			continue
+		}
+
+		_, err = s.bus.Bucket(ctx, bucket)
+		if err != nil {
+			err = s.bus.CreateBucket(ctx, bucket, api.CreateBucketOptions{})
 			if err != nil {
 				s.logger.Error(fmt.Sprintf("couldn't create bucket: %s", err))
 				continue
 			}
 		}
-		_, err = s.bus.Object(ctx, fm.Bucket, fm.Path, api.GetObjectOptions{})
+		_, err = s.bus.Object(ctx, bucket, path, api.GetObjectOptions{})
 		if err == nil {
-			err = s.bus.DeleteObject(ctx, fm.Bucket, fm.Path, api.DeleteObjectOptions{})
+			err = s.bus.DeleteObject(ctx, bucket, path, api.DeleteObjectOptions{})
 			if err != nil {
 				s.logger.Error(fmt.Sprintf("couldn't delete object: %s", err))
 				continue
 			}
 		}
-		if err := s.bus.AddObject(ctx, fm.Bucket, fm.Path, set, obj, used, api.AddObjectOptions{
+		if len(fm.Data) > 0 {
+			// Deduct redundancy params from the first slab. If there are
+			// no complete slabs, use the current redundancy settings.
+			ms := gp.RedundancySettings.MinShards
+			ts := gp.RedundancySettings.TotalShards
+			if len(fm.Slabs) > 0 {
+				ms = int(fm.Slabs[0].MinShards)
+				ts = len(fm.Slabs[0].Shards)
+			}
+			ps, _, err := s.bus.AddPartialSlab(ctx, fm.Data, uint8(ms), uint8(ts), set)
+			if err != nil {
+				s.logger.Error(fmt.Sprintf("couldn't add partial slab: %s", err))
+				continue
+			}
+			obj.PartialSlabs = ps
+		}
+		for i, slab := range obj.Slabs {
+			for j, shard := range slab.Shards {
+				shard.Contracts = map[types.PublicKey][]types.FileContractID{
+					shard.LatestHost: {
+						used[shard.LatestHost],
+					},
+				}
+				obj.Slabs[i].Shards[j] = shard
+			}
+		}
+		if err := s.bus.AddObject(ctx, bucket, path, set, obj, api.AddObjectOptions{
 			ETag:     fm.ETag,
-			MimeType: fm.MimeType,
+			MimeType: mimeType,
 		}); err != nil {
 			s.logger.Error(fmt.Sprintf("couldn't add object: %s", err))
 			continue
@@ -1146,18 +1084,15 @@ func (s *Satellite) updateSlabHandler(jc jape.Context) {
 
 	usr := updateSlabRequest{
 		PubKey: pk,
-		Slab: object.SlabSlice{
-			Slab:   req.Slab,
-			Offset: 0,
-			Length: 0,
-		},
+		Slab:   req.Slab,
+		Packed: req.Packed,
 	}
 
 	h := types.NewHasher()
 	usr.EncodeToWithoutSignature(h.E)
 	usr.Signature = sk.SignHash(h.Sum())
 
-	err := s.withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
+	err := withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
 		err = t.WriteRequest(specifierUpdateSlab, &usr)
 		if err != nil {
 			return
@@ -1179,6 +1114,60 @@ func (s *Satellite) updateSlabHandler(jc jape.Context) {
 	if jc.Check("couldn't update slab", err) != nil {
 		s.logger.Error(fmt.Sprintf("couldn't update slab: %s", err))
 	}
+}
+
+// requestSlabsHandler handles the GET /slabs requests.
+func (s *Satellite) requestSlabsHandler(jc jape.Context) {
+	cfg := s.store.getConfig()
+	if !cfg.Enabled {
+		s.logger.Error("couldn't request modified slabs: satellite disabled")
+		jc.Check("ERROR", errors.New("satellite disabled"))
+		return
+	}
+	set := jc.PathParam("set")
+	if set == "" {
+		jc.Check("ERROR", errors.New("contract set cannot be empty"))
+		return
+	}
+	s.logger.Info("requesting modified slabs from the satellite")
+	ctx := jc.Request.Context()
+
+	pk, sk := generateKeyPair(cfg.RenterSeed)
+	rsr := requestSlabsRequest{
+		PubKey: pk,
+	}
+
+	h := types.NewHasher()
+	rsr.EncodeToWithoutSignature(h.E)
+	rsr.Signature = sk.SignHash(h.Sum())
+
+	var ms modifiedSlabs
+	err := withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
+		if err := t.WriteRequest(specifierRequestSlabs, &rsr); err != nil {
+			return err
+		}
+
+		if err := t.ReadResponse(&ms, 65536); err != nil {
+			return err
+		}
+
+		return nil
+	})
+
+	if jc.Check("couldn't request modified slabs", err) != nil {
+		s.logger.Error(fmt.Sprintf("couldn't request modified slabs: %s", err))
+		return
+	}
+
+	for _, slab := range ms.slabs {
+		if err := s.bus.UpdateSlab(ctx, slab, set); err != nil {
+			s.logger.Error(fmt.Sprintf("couldn't update slab: %s", err))
+			continue
+		}
+	}
+
+	s.logger.Info(fmt.Sprintf("successfully updated %d slabs", len(ms.slabs)))
+	jc.Encode(ms.slabs)
 }
 
 // shareContractsHandler handles the POST /contracts requests.
@@ -1213,7 +1202,7 @@ func (s *Satellite) shareContractsHandler(jc jape.Context) {
 	sr.EncodeToWithoutSignature(h.E)
 	sr.Signature = sk.SignHash(h.Sum())
 
-	err = s.withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
+	err = withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
 		err = t.WriteRequest(specifierShareContracts, &sr)
 		if err != nil {
 			return
@@ -1236,4 +1225,177 @@ func (s *Satellite) shareContractsHandler(jc jape.Context) {
 	if err != nil {
 		s.logger.Error(fmt.Sprintf("couldn't send contracts: %s", err))
 	}
+}
+
+func newMimeReader(r io.Reader) (mimeType string, recycled io.Reader, err error) {
+	buf := bytes.NewBuffer(nil)
+	mtype, err := mimetype.DetectReader(io.TeeReader(r, buf))
+	recycled = io.MultiReader(buf, r)
+	return mtype.String(), recycled, err
+}
+
+// UploadObject uploads a file to the satellite.
+func UploadObject(r io.Reader, bucket, path, mimeType string) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg, err := StaticSatellite.Config()
+	if err != nil {
+		return err
+	}
+	if !cfg.Enabled {
+		return errors.New("couldn't upload object: satellite disabled")
+	}
+
+	// if not given, try decide on a mime type using the file extension
+	if mimeType == "" {
+		mimeType = mime.TypeByExtension(filepath.Ext(path))
+
+		// if mime type is still not known, wrap the reader with a mime reader
+		if mimeType == "" {
+			var err error
+			mimeType, r, err = newMimeReader(r)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	cr, err := cfg.EncryptionKey.Encrypt(r, 0)
+	if err != nil {
+		return err
+	}
+
+	pk, sk := generateKeyPair(cfg.RenterSeed)
+
+	encryptedBucket, err := encodeString(cfg.EncryptionKey, bucket)
+	if err != nil {
+		return errors.New("couldn't encode bucket")
+	}
+
+	encryptedPath, err := encodeString(cfg.EncryptionKey, path)
+	if err != nil {
+		return errors.New("couldn't encode path")
+	}
+
+	encryptedMimeType, err := encodeString(cfg.EncryptionKey, mimeType)
+	if err != nil {
+		return errors.New("couldn't encode MIME type")
+	}
+
+	req := uploadRequest{
+		PubKey:   pk,
+		Bucket:   encryptedBucket,
+		Path:     encryptedPath,
+		MimeType: encryptedMimeType,
+	}
+	h := types.NewHasher()
+	req.EncodeToWithoutSignature(h.E)
+	req.Signature = sk.SignHash(h.Sum())
+
+	host, _, err := net.SplitHostPort(cfg.Address)
+	if err != nil {
+		return err
+	}
+	addr := net.JoinHostPort(host, cfg.MuxPort)
+
+	err = withTransportV3(ctx, cfg.PublicKey, addr, func(t *rhpv3.Transport) (err error) {
+		stream := t.DialStream()
+		stream.SetDeadline(time.Now().Add(30 * time.Second))
+		err = stream.WriteRequest(specifierUploadFile, &req)
+		if err != nil {
+			return err
+		}
+
+		var resp uploadResponse
+		err = stream.ReadResponse(&resp, 1024)
+		if err != nil {
+			return err
+		}
+
+		dataLen := uint64(1048576)
+		buf := make([]byte, dataLen)
+		var ud uploadData
+		var total uint64
+		incompleteChunk := resp.DataSize % dataLen
+		completeChunks := resp.DataSize - incompleteChunk
+		for total < completeChunks {
+			_, err := io.ReadFull(cr, buf)
+			if err != nil {
+				return stream.WriteResponse(&ud)
+			}
+			total += dataLen
+		}
+		if incompleteChunk > 0 {
+			buf := make([]byte, incompleteChunk)
+			_, err := io.ReadFull(cr, buf)
+			if err != nil {
+				return stream.WriteResponse(&ud)
+			}
+		}
+
+		for {
+			stream.SetDeadline(time.Now().Add(30 * time.Second))
+			numBytes, err := io.ReadFull(cr, buf)
+			if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+				return err
+			}
+			ud.Data = buf[:numBytes]
+			ud.More = err == nil
+			if err := stream.WriteResponse(&ud); err != nil {
+				return err
+			}
+			if err := stream.ReadResponse(&resp, 1024); err != nil {
+				return err
+			}
+			if !ud.More {
+				break
+			}
+		}
+
+		return nil
+	})
+
+	return err
+}
+
+// encodeString encrypts a string with the encryption key.
+func encodeString(key object.EncryptionKey, str string) (ciphertext [255]byte, err error) {
+	if len(str) > 255 {
+		err = errors.New("string length exceeds 255 bytes")
+		return
+	}
+
+	var plaintext [255]byte
+	copy(plaintext[:], []byte(str))
+	rs, err := key.Encrypt(bytes.NewReader(plaintext[:]), 0)
+	if err != nil {
+		return
+	}
+
+	ct, err := io.ReadAll(rs)
+	if err != nil {
+		return
+	}
+
+	copy(ciphertext[:], ct)
+	return
+}
+
+// decodeString decrypts a string encrypted with the encryption key.
+func decodeString(key object.EncryptionKey, ciphertext [255]byte) (string, error) {
+	var out bytes.Buffer
+	ws := key.Decrypt(&out, 0)
+	_, err := ws.Write(ciphertext[:])
+	if err != nil {
+		return "", err
+	}
+
+	b := out.Bytes()
+	i := bytes.Index(b, []byte{0})
+	if i < 0 {
+		i = len(b)
+	}
+
+	return string(b[:i]), nil
 }

@@ -28,9 +28,10 @@ type autopilotClient interface {
 
 // busClient is the interface for renterd/bus.
 type busClient interface {
-	AddContract(ctx context.Context, contract rhpv2.ContractRevision, totalCost types.Currency, startHeight uint64) (api.ContractMetadata, error)
-	AddObject(ctx context.Context, bucket, path, contractSet string, o object.Object, usedContracts map[types.PublicKey]types.FileContractID, opts api.AddObjectOptions) error
-	AddRenewedContract(ctx context.Context, contract rhpv2.ContractRevision, totalCost types.Currency, startHeight uint64, renewedFrom types.FileContractID) (api.ContractMetadata, error)
+	AddContract(ctx context.Context, c rhpv2.ContractRevision, contractPrice, totalCost types.Currency, startHeight uint64, state string) (api.ContractMetadata, error)
+	AddObject(ctx context.Context, bucket, path, contractSet string, o object.Object, opts api.AddObjectOptions) error
+	AddPartialSlab(ctx context.Context, data []byte, minShards, totalShards uint8, contractSet string) (slabs []object.PartialSlab, slabBufferMaxSizeSoftReached bool, err error)
+	AddRenewedContract(ctx context.Context, c rhpv2.ContractRevision, contractPrice, totalCost types.Currency, startHeight uint64, renewedFrom types.FileContractID, state string) (api.ContractMetadata, error)
 	Bucket(ctx context.Context, bucketName string) (resp api.Bucket, err error)
 	Contract(ctx context.Context, id types.FileContractID) (api.ContractMetadata, error)
 	Contracts(ctx context.Context) ([]api.ContractMetadata, error)
@@ -41,8 +42,12 @@ type busClient interface {
 	ListBuckets(ctx context.Context) (buckets []api.Bucket, err error)
 	ListObjects(ctx context.Context, bucket string, opts api.ListObjectOptions) (resp api.ObjectsListResponse, err error)
 	Object(ctx context.Context, bucket, path string, options api.GetObjectOptions) (api.ObjectsResponse, error)
+	FetchPartialSlab(ctx context.Context, key object.EncryptionKey, offset, length uint32) ([]byte, error)
 	RecordContractSpending(ctx context.Context, records []api.ContractSpendingRecord) error
 	SetContractSet(ctx context.Context, set string, contracts []types.FileContractID) error
+	Slab(ctx context.Context, key object.EncryptionKey) (slab object.Slab, err error)
+	UpdateSlab(ctx context.Context, s object.Slab, contractSet string) error
+	UploadPackingSettings(ctx context.Context) (ups api.UploadPackingSettings, err error)
 }
 
 // workerClient is the interface for renterd/worker.
@@ -213,6 +218,7 @@ func (s *Satellite) Handler() http.Handler {
 		"POST   /settings":      s.settingsHandlerPOST,
 		"POST   /metadata":      s.saveMetadataHandler,
 		"GET    /metadata/:set": s.requestMetadataHandler,
+		"GET    /slabs/:set":    s.requestSlabsHandler,
 		"POST   /slab":          s.updateSlabHandler,
 	})
 }
@@ -234,6 +240,7 @@ var cfg Config
 func init() {
 	parseEnvVar("RENTERD_SATELLITE_ENABLED", &cfg.Enabled)
 	parseEnvVar("RENTERD_SATELLITE_ADDR", &cfg.Address)
+	parseEnvVar("RENTERD_SATELLITE_MUX", &cfg.MuxPort)
 	parseEnvVar("RENTERD_SATELLITE_KEY", &cfg.PublicKey)
 	parseEnvVar("RENTERD_SATELLITE_SEED", &cfg.RenterSeed)
 }

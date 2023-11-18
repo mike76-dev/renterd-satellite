@@ -157,12 +157,19 @@ func (c *Client) RequestMetadata(ctx context.Context, set string) (objects []obj
 }
 
 // UpdateSlab sends the updated slab to the satellite.
-func (c *Client) UpdateSlab(ctx context.Context, s object.Slab) error {
+func (c *Client) UpdateSlab(ctx context.Context, s object.Slab, packed bool) error {
 	req := UpdateSlabRequest{
-		Slab: s,
+		Slab:   s,
+		Packed: packed,
 	}
 	err := c.c.WithContext(ctx).POST("/slab", req, nil)
 	return err
+}
+
+// RequestSlabs requests any modified slabs from the satellite.
+func (c *Client) RequestSlabs(ctx context.Context, set string) (slabs []object.Slab, err error) {
+	err = c.c.WithContext(ctx).GET(fmt.Sprintf("/slabs/%s", set), &slabs)
+	return
 }
 
 // NewClient returns a client that communicates with a renterd satellite server

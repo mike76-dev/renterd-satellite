@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"go.sia.tech/core/types"
+	"go.sia.tech/renterd/object"
 	"go.sia.tech/siad/modules"
 )
 
@@ -34,6 +35,7 @@ func (s *ephemeralStore) setConfig(c Config) error {
 	if (pk != types.PublicKey{}) {
 		return s.addSatellite(SatelliteInfo{
 			Address:    c.Address,
+			MuxPort:    c.MuxPort,
 			PublicKey:  c.PublicKey,
 			RenterSeed: c.RenterSeed,
 		})
@@ -127,6 +129,11 @@ func (s *jsonStore) load() error {
 	}
 	s.config = p.Config
 	s.satellites = p.Satellites
+	if s.config.EncryptionKey == (object.EncryptionKey{}) {
+		s.config.EncryptionKey = object.GenerateEncryptionKey()
+		return s.save()
+	}
+
 	return nil
 }
 
