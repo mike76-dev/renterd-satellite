@@ -27,10 +27,6 @@ const (
 	// timeoutHostRevision is the amount of time we wait to receive the latest
 	// revision from the host.
 	timeoutHostRevision = 15 * time.Second
-
-	// metadataRequestMaxSize should be high enough to allow uploading or
-	// downloading a partial slab.
-	metadataRequestMaxSize = 1e9
 )
 
 var (
@@ -873,20 +869,42 @@ func (s *Satellite) saveMetadataHandler(jc jape.Context) {
 	smr.EncodeToWithoutSignature(h.E)
 	smr.Signature = sk.SignHash(h.Sum())
 
-	err = withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
-		err = t.WriteRequest(specifierSaveMetadata, &smr)
+	host, _, err := net.SplitHostPort(cfg.Address)
+	if jc.Check("couldn't get satellite address", err) != nil {
+		return
+	}
+	addr := net.JoinHostPort(host, cfg.MuxPort)
+
+	err = withTransportV3(ctx, cfg.PublicKey, addr, func(t *rhpv3.Transport) (err error) {
+		stream := t.DialStream()
+		stream.SetDeadline(time.Now().Add(30 * time.Second))
+
+		err = stream.WriteRequest(specifierSaveMetadata, &smr)
 		if err != nil {
 			return
 		}
 
-		var resp rhpv2.RPCError
-		err = t.ReadResponse(&resp, 1024)
-		if jc.Check("could not read response", err) != nil {
-			return
-		}
-
-		if resp.Description != "" {
-			return errors.New(resp.Description)
+		dataLen := 1048576
+		var ud uploadData
+		var resp uploadResponse
+		for len(smr.Metadata.Data) > 0 {
+			stream.SetDeadline(time.Now().Add(30 * time.Second))
+			if len(smr.Metadata.Data) > dataLen {
+				ud.Data = smr.Metadata.Data[:dataLen]
+			} else {
+				ud.Data = smr.Metadata.Data
+			}
+			smr.Metadata.Data = smr.Metadata.Data[len(ud.Data):]
+			ud.More = len(smr.Metadata.Data) > 0
+			if err := stream.WriteResponse(&ud); err != nil {
+				return err
+			}
+			if err := stream.ReadResponse(&resp, 1024); err != nil {
+				return err
+			}
+			if resp.DataSize != uint64(len(ud.Data)) {
+				return errors.New("wrong data size received")
+			}
 		}
 
 		return nil
@@ -935,35 +953,74 @@ func (s *Satellite) requestMetadataHandler(jc jape.Context) {
 		if jc.Check("couldn't requests present objects", err) != nil {
 			return
 		}
-		encryptedBucket, err := encodeString(cfg.EncryptionKey, bucket.Name)
-		if jc.Check("couldn't encode bucket", err) != nil {
-			return
-		}
-		bf := encodedBucketFiles{
-			Name: encryptedBucket,
-		}
-		for _, entry := range resp.Objects {
-			encryptedPath, err := encodeString(cfg.EncryptionKey, entry.Name)
-			if jc.Check("couldn't encode path", err) != nil {
+		if len(resp.Objects) > 0 {
+			encryptedBucket, err := encodeString(cfg.EncryptionKey, bucket.Name)
+			if jc.Check("couldn't encode bucket", err) != nil {
 				return
 			}
-			bf.Paths = append(bf.Paths, encryptedPath)
+			bf := encodedBucketFiles{
+				Name: encryptedBucket,
+			}
+			for _, entry := range resp.Objects {
+				encryptedPath, err := encodeString(cfg.EncryptionKey, entry.Name)
+				if jc.Check("couldn't encode path", err) != nil {
+					return
+				}
+				bf.Paths = append(bf.Paths, encryptedPath)
+			}
+			rmr.PresentObjects = append(rmr.PresentObjects, bf)
 		}
-		rmr.PresentObjects = append(rmr.PresentObjects, bf)
 	}
 
 	h := types.NewHasher()
 	rmr.EncodeToWithoutSignature(h.E)
 	rmr.Signature = sk.SignHash(h.Sum())
 
+	host, _, err := net.SplitHostPort(cfg.Address)
+	if jc.Check("couldn't get satellite address", err) != nil {
+		return
+	}
+	addr := net.JoinHostPort(host, cfg.MuxPort)
+
 	var rf renterFiles
-	err = withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
-		if err := t.WriteRequest(specifierRequestMetadata, &rmr); err != nil {
+	err = withTransportV3(ctx, cfg.PublicKey, addr, func(t *rhpv3.Transport) (err error) {
+		stream := t.DialStream()
+		stream.SetDeadline(time.Now().Add(30 * time.Second))
+
+		if err := stream.WriteRequest(specifierRequestMetadata, &rmr); err != nil {
 			return err
 		}
 
-		if err := t.ReadResponse(&rf, metadataRequestMaxSize); err != nil {
+		if err := stream.ReadResponse(&rf, 65536); err != nil {
 			return err
+		}
+
+		for i := range rf.metadata {
+			var resp uploadResponse
+			if jc.Check("couldn't read response", stream.ReadResponse(&resp, 1024)) != nil {
+				return err
+			}
+
+			if resp.DataSize == 0 {
+				continue
+			}
+
+			ud := uploadData{
+				More: true,
+			}
+			maxLen := uint64(1048576) + 8 + 1
+			offset := 0
+			for ud.More {
+				if jc.Check("couldn't read data", stream.ReadResponse(&ud, maxLen)) != nil {
+					return err
+				}
+				copy(rf.metadata[i].Data[offset:], ud.Data)
+				offset += len(ud.Data)
+				resp.DataSize = uint64(len(ud.Data))
+				if jc.Check("couldn't write response", stream.WriteResponse(&resp)) != nil {
+					return err
+				}
+			}
 		}
 
 		return nil

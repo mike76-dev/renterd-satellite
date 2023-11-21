@@ -525,7 +525,6 @@ func (fm *encodedFileMetadata) EncodeTo(e *types.Encoder) {
 		e.WriteBool(true)
 		e.WritePrefix(0)
 	}
-	e.WriteBytes(fm.Data)
 }
 
 // DecodeFrom implements types.ProtocolObject.
@@ -572,7 +571,6 @@ func (fm *encodedFileMetadata) DecodeFrom(d *types.Decoder) {
 			fm.Slabs = append(fm.Slabs, s)
 		}
 	}
-	fm.Data = d.ReadBytes()
 }
 
 // saveMetadataRequest is used to save file metadata on the satellite.
@@ -593,6 +591,7 @@ func (smr *saveMetadataRequest) EncodeTo(e *types.Encoder) {
 func (smr *saveMetadataRequest) EncodeToWithoutSignature(e *types.Encoder) {
 	e.Write(smr.PubKey[:])
 	smr.Metadata.EncodeTo(e)
+	e.WriteUint64(uint64(len(smr.Metadata.Data)))
 }
 
 // DecodeFrom implements types.ProtocolObject.
@@ -617,6 +616,10 @@ func (rf *renterFiles) DecodeFrom(d *types.Decoder) {
 	for num > 0 {
 		var fm encodedFileMetadata
 		fm.DecodeFrom(d)
+		dataSize := d.ReadUint64()
+		if dataSize > 0 {
+			fm.Data = make([]byte, dataSize)
+		}
 		rf.metadata = append(rf.metadata, fm)
 		num--
 	}
@@ -829,7 +832,7 @@ type uploadResponse struct {
 
 // EncodeTo implements types.ProtocolObject.
 func (ur *uploadResponse) EncodeTo(e *types.Encoder) {
-	// Nothing to do here.
+	e.WriteUint64(ur.DataSize)
 }
 
 // DecodeFrom implements types.ProtocolObject.
@@ -852,5 +855,6 @@ func (ud *uploadData) EncodeTo(e *types.Encoder) {
 
 // DecodeFrom implements types.ProtocolObject.
 func (ud *uploadData) DecodeFrom(d *types.Decoder) {
-	// Nothing to do here.
+	ud.Data = d.ReadBytes()
+	ud.More = d.ReadBool()
 }
