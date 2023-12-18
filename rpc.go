@@ -15,13 +15,13 @@ import (
 	"time"
 
 	"github.com/gabriel-vasile/mimetype"
+	"github.com/mike76-dev/renterd-satellite/encrypt"
 	rhpv2 "go.sia.tech/core/rhp/v2"
 	rhpv3 "go.sia.tech/core/rhp/v3"
 	"go.sia.tech/core/types"
 	"go.sia.tech/jape"
 	"go.sia.tech/renterd/api"
 	"go.sia.tech/renterd/object"
-	"go.sia.tech/renterd/satellite/encrypt"
 
 	"golang.org/x/crypto/blake2b"
 )
