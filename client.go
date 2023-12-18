@@ -3,6 +3,8 @@ package satellite
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strings"
 
 	rhpv2 "go.sia.tech/core/rhp/v2"
 	"go.sia.tech/core/types"
@@ -100,6 +102,41 @@ func (c *Client) GetSatellites() (satellites map[types.PublicKey]SatelliteInfo, 
 	return
 }
 
+// GetObject retrieves the information about an encrypted object.
+func (c *Client) GetObject(bucket, path string) (or ObjectResponse, err error) {
+	values := url.Values{}
+	values.Set("bucket", bucket)
+	escapedPath := url.PathEscape(strings.TrimPrefix(path, "/"))
+	err = c.c.GET(fmt.Sprintf("/object/%s?"+values.Encode(), escapedPath), &or)
+	return
+}
+
+// AddObject adds the information about an encrypted object.
+func (c *Client) AddObject(bucket, path string, parts []uint64) error {
+	req := ObjectPutRequest{
+		Bucket: bucket,
+		Parts:  parts,
+	}
+	escapedPath := url.PathEscape(strings.TrimPrefix(path, "/"))
+	return c.c.PUT(fmt.Sprintf("/object/%s", escapedPath), &req)
+}
+
+// DeleteObject deletes the information about an encrypted object.
+func (c *Client) DeleteObject(bucket, path string) error {
+	values := url.Values{}
+	values.Set("bucket", bucket)
+	path = url.PathEscape(strings.TrimPrefix(path, "/"))
+	return c.c.DELETE(fmt.Sprintf("/object/%s?"+values.Encode(), path))
+}
+
+// DeleteObjects deletes the information about a series of encrypted objects.
+func (c *Client) DeleteObjects(bucket, path string) error {
+	values := url.Values{}
+	values.Set("bucket", bucket)
+	path = url.PathEscape(strings.TrimPrefix(path, "/"))
+	return c.c.DELETE(fmt.Sprintf("/objects/%s?"+values.Encode(), path))
+}
+
 // FormContract requests the satellite to form a contract with the
 // specified host and adds it to the contract set.
 func (c *Client) FormContract(ctx context.Context, hpk types.PublicKey, endHeight uint64, storage uint64, upload uint64, download uint64) (api.ContractMetadata, error) {
@@ -142,9 +179,10 @@ func (c *Client) UpdateSettings(ctx context.Context, settings RenterSettings) er
 }
 
 // SaveMetadata sends the file metadata to the satellite.
-func (c *Client) SaveMetadata(ctx context.Context, fm FileMetadata) error {
+func (c *Client) SaveMetadata(ctx context.Context, fm FileMetadata, isNew bool) error {
 	req := SaveMetadataRequest{
 		Metadata: fm,
+		New:      isNew,
 	}
 	err := c.c.WithContext(ctx).POST("/metadata", req, nil)
 	return err
@@ -170,6 +208,38 @@ func (c *Client) UpdateSlab(ctx context.Context, s object.Slab, packed bool) err
 func (c *Client) RequestSlabs(ctx context.Context, set string) (slabs []object.Slab, err error) {
 	err = c.c.WithContext(ctx).GET(fmt.Sprintf("/slabs/%s", set), &slabs)
 	return
+}
+
+// CreateMultipart registers a new multipart upload with the satellite
+// and returns the upload ID.
+func (c *Client) CreateMultipart(ctx context.Context, key object.EncryptionKey, bucket, path, mimeType string) (string, error) {
+	req := CreateMultipartRequest{
+		Key:      key,
+		Bucket:   bucket,
+		Path:     path,
+		MimeType: mimeType,
+	}
+	var resp CreateMultipartResponse
+	err := c.c.WithContext(ctx).POST("/multipart/create", req, &resp)
+	return resp.UploadID, err
+}
+
+// AbortMultipart deletes an incomplete multipart upload on the satellite.
+func (c *Client) AbortMultipart(ctx context.Context, id string) error {
+	req := CreateMultipartResponse{
+		UploadID: id,
+	}
+	err := c.c.WithContext(ctx).POST("/multipart/abort", req, nil)
+	return err
+}
+
+// CompleteMultipart completes an incomplete multipart upload on the satellite.
+func (c *Client) CompleteMultipart(ctx context.Context, id string) error {
+	req := CreateMultipartResponse{
+		UploadID: id,
+	}
+	err := c.c.WithContext(ctx).POST("/multipart/complete", req, nil)
+	return err
 }
 
 // NewClient returns a client that communicates with a renterd satellite server

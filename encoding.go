@@ -484,46 +484,38 @@ func (rs *renterSignature) DecodeFrom(d *types.Decoder) {
 // encodedFileMetadata contains the file metadata with certain
 // fields encoded.
 type encodedFileMetadata struct {
-	Key          object.EncryptionKey `json:"key"`
-	Bucket       [255]byte            `json:"bucket"`
-	Path         [255]byte            `json:"path"`
-	ETag         string               `json:"etag"`
-	MimeType     [255]byte            `json:"mime"`
-	Slabs        []object.SlabSlice   `json:"slabs"`
-	PartialSlabs []object.PartialSlab `json:"partialSlabs"`
-	Data         []byte               `json:"data"`
+	Key       object.EncryptionKey `json:"key"`
+	Bucket    []byte               `json:"bucket"`
+	Path      []byte               `json:"path"`
+	ETag      string               `json:"etag"`
+	MimeType  []byte               `json:"mime"`
+	Encrypted string               `json:"encrypted"`
+	Slabs     []object.SlabSlice   `json:"slabs"`
+	Data      []byte               `json:"data"`
 }
 
 // EncodeTo implements types.ProtocolObject.
 func (fm *encodedFileMetadata) EncodeTo(e *types.Encoder) {
 	key, _ := hex.DecodeString(strings.TrimPrefix(fm.Key.String(), "key:"))
 	e.Write(key[:])
-	e.Write(fm.Bucket[:])
-	e.Write(fm.Path[:])
+	e.WriteBytes(fm.Bucket)
+	e.WriteBytes(fm.Path)
 	e.WriteString(fm.ETag)
-	e.Write(fm.MimeType[:])
-	e.WritePrefix(len(fm.Slabs) + len(fm.PartialSlabs))
+	e.WriteBytes(fm.MimeType)
+	e.WriteString(fm.Encrypted)
+	e.WritePrefix(len(fm.Slabs))
 	for _, s := range fm.Slabs {
 		key, _ := hex.DecodeString(strings.TrimPrefix(s.Key.String(), "key:"))
 		e.Write(key[:])
 		e.WriteUint64(uint64(s.MinShards))
 		e.WriteUint64(uint64(s.Offset))
 		e.WriteUint64(uint64(s.Length))
-		e.WriteBool(false)
+		e.WriteBool(s.IsPartial())
 		e.WritePrefix(len(s.Shards))
 		for _, ss := range s.Shards {
 			e.Write(ss.LatestHost[:])
 			e.Write(ss.Root[:])
 		}
-	}
-	for _, ps := range fm.PartialSlabs {
-		key, _ := hex.DecodeString(strings.TrimPrefix(ps.Key.String(), "key:"))
-		e.Write(key[:])
-		e.WriteUint64(0)
-		e.WriteUint64(uint64(ps.Offset))
-		e.WriteUint64(uint64(ps.Length))
-		e.WriteBool(true)
-		e.WritePrefix(0)
 	}
 }
 
@@ -532,10 +524,11 @@ func (fm *encodedFileMetadata) DecodeFrom(d *types.Decoder) {
 	var key types.Hash256
 	d.Read(key[:])
 	fm.Key.UnmarshalText([]byte(strings.TrimPrefix(key.String(), "h:")))
-	d.Read(fm.Bucket[:])
-	d.Read(fm.Path[:])
+	fm.Bucket = d.ReadBytes()
+	fm.Path = d.ReadBytes()
 	fm.ETag = d.ReadString()
-	d.Read(fm.MimeType[:])
+	fm.MimeType = d.ReadBytes()
+	fm.Encrypted = d.ReadString()
 	numSlabs := d.ReadPrefix()
 	for i := 0; i < numSlabs; i++ {
 		var k types.Hash256
@@ -547,29 +540,22 @@ func (fm *encodedFileMetadata) DecodeFrom(d *types.Decoder) {
 		length := uint32(d.ReadUint64())
 		partial := d.ReadBool()
 		numShards := d.ReadPrefix()
-		if partial {
-			ps := object.PartialSlab{
-				Key:    key,
-				Offset: offset,
-				Length: length,
-			}
-			fm.PartialSlabs = append(fm.PartialSlabs, ps)
-		} else {
-			s := object.SlabSlice{
-				Slab: object.Slab{
-					Key:       key,
-					MinShards: minShards,
-				},
-				Offset: offset,
-				Length: length,
-			}
+		s := object.SlabSlice{
+			Slab: object.Slab{
+				Key:       key,
+				MinShards: minShards,
+			},
+			Offset: offset,
+			Length: length,
+		}
+		if !partial {
 			s.Shards = make([]object.Sector, numShards)
 			for j := 0; j < numShards; j++ {
 				d.Read(s.Shards[j].LatestHost[:])
 				d.Read(s.Shards[j].Root[:])
 			}
-			fm.Slabs = append(fm.Slabs, s)
 		}
+		fm.Slabs = append(fm.Slabs, s)
 	}
 }
 
@@ -602,6 +588,7 @@ func (smr *saveMetadataRequest) DecodeFrom(d *types.Decoder) {
 // renterFiles is a collection of FileMetadata.
 type renterFiles struct {
 	metadata []encodedFileMetadata
+	more     bool
 }
 
 // EncodeTo implements types.ProtocolObject.
@@ -623,12 +610,13 @@ func (rf *renterFiles) DecodeFrom(d *types.Decoder) {
 		rf.metadata = append(rf.metadata, fm)
 		num--
 	}
+	rf.more = d.ReadBool()
 }
 
 // encodedBucketFiles contains a list of filepaths within a single bucket.
 type encodedBucketFiles struct {
-	Name  [255]byte   `json:"name"`
-	Paths [][255]byte `json:"paths"`
+	Name  []byte   `json:"name"`
+	Paths [][]byte `json:"paths"`
 }
 
 // requestMetadataRequest is used to request file metadata.
@@ -650,10 +638,10 @@ func (rmr *requestMetadataRequest) EncodeToWithoutSignature(e *types.Encoder) {
 	e.Write(rmr.PubKey[:])
 	e.WritePrefix(len(rmr.PresentObjects))
 	for _, po := range rmr.PresentObjects {
-		e.Write(po.Name[:])
+		e.WriteBytes(po.Name)
 		e.WritePrefix(len(po.Paths))
 		for _, p := range po.Paths {
-			e.Write(p[:])
+			e.WriteBytes(p)
 		}
 	}
 }
@@ -799,9 +787,10 @@ func (sr *shareRequest) DecodeFrom(d *types.Decoder) {
 // uploadRequest is used to upload a file to the satellite via RHP3.
 type uploadRequest struct {
 	PubKey    types.PublicKey
-	Bucket    [255]byte
-	Path      [255]byte
-	MimeType  [255]byte
+	Bucket    []byte
+	Path      []byte
+	MimeType  []byte
+	Encrypted bool
 	Signature types.Signature
 }
 
@@ -815,9 +804,10 @@ func (ur *uploadRequest) EncodeTo(e *types.Encoder) {
 // leaves the signature out.
 func (ur *uploadRequest) EncodeToWithoutSignature(e *types.Encoder) {
 	e.Write(ur.PubKey[:])
-	e.Write(ur.Bucket[:])
-	e.Write(ur.Path[:])
-	e.Write(ur.MimeType[:])
+	e.WriteBytes(ur.Bucket)
+	e.WriteBytes(ur.Path)
+	e.WriteBytes(ur.MimeType)
+	e.WriteBool(ur.Encrypted)
 }
 
 // DecodeFrom implements types.ProtocolObject.
@@ -857,4 +847,131 @@ func (ud *uploadData) EncodeTo(e *types.Encoder) {
 func (ud *uploadData) DecodeFrom(d *types.Decoder) {
 	ud.Data = d.ReadBytes()
 	ud.More = d.ReadBool()
+}
+
+// registerMultipartRequest is used to register a new S3 multipart upload.
+type registerMultipartRequest struct {
+	PubKey    types.PublicKey
+	Key       object.EncryptionKey
+	Bucket    []byte
+	Path      []byte
+	MimeType  []byte
+	Encrypted bool
+	Signature types.Signature
+}
+
+// EncodeTo implements types.ProtocolObject.
+func (rmr *registerMultipartRequest) EncodeTo(e *types.Encoder) {
+	rmr.EncodeToWithoutSignature(e)
+	rmr.Signature.EncodeTo(e)
+}
+
+// EncodeToWithoutSignature does the same as EncodeTo but
+// leaves the signature out.
+func (rmr *registerMultipartRequest) EncodeToWithoutSignature(e *types.Encoder) {
+	e.Write(rmr.PubKey[:])
+	key, _ := hex.DecodeString(strings.TrimPrefix(rmr.Key.String(), "key:"))
+	e.Write(key[:])
+	e.WriteBytes(rmr.Bucket)
+	e.WriteBytes(rmr.Path)
+	e.WriteBytes(rmr.MimeType)
+	e.WriteBool(rmr.Encrypted)
+}
+
+// DecodeFrom implements types.ProtocolObject.
+func (rmr *registerMultipartRequest) DecodeFrom(d *types.Decoder) {
+	// Nothing to do here.
+}
+
+// registerMultipartResponse is the response type for registerMultipartRequest.
+type registerMultipartResponse struct {
+	UploadID types.Hash256
+}
+
+// EncodeTo implements types.ProtocolObject.
+func (rmr *registerMultipartResponse) EncodeTo(e *types.Encoder) {
+	// Nothing to do here.
+}
+
+// DecodeFrom implements types.ProtocolObject.
+func (rmr *registerMultipartResponse) DecodeFrom(d *types.Decoder) {
+	d.Read(rmr.UploadID[:])
+}
+
+// deleteMultipartRequest is used to abort an incomplete S3 multipart upload.
+type deleteMultipartRequest struct {
+	PubKey    types.PublicKey
+	UploadID  types.Hash256
+	Signature types.Signature
+}
+
+// EncodeTo implements types.ProtocolObject.
+func (dmr *deleteMultipartRequest) EncodeTo(e *types.Encoder) {
+	dmr.EncodeToWithoutSignature(e)
+	dmr.Signature.EncodeTo(e)
+}
+
+// EncodeToWithoutSignature does the same as EncodeTo but
+// leaves the signature out.
+func (dmr *deleteMultipartRequest) EncodeToWithoutSignature(e *types.Encoder) {
+	e.Write(dmr.PubKey[:])
+	e.Write(dmr.UploadID[:])
+}
+
+// DecodeFrom implements types.ProtocolObject.
+func (dmr *deleteMultipartRequest) DecodeFrom(d *types.Decoder) {
+	// Nothing to do here.
+}
+
+// uploadPartRequest is used to upload a part of a multipart upload
+// to the satellite via RHP3.
+type uploadPartRequest struct {
+	PubKey     types.PublicKey
+	UploadID   types.Hash256
+	PartNumber int
+	Signature  types.Signature
+}
+
+// EncodeTo implements types.ProtocolObject.
+func (upr *uploadPartRequest) EncodeTo(e *types.Encoder) {
+	upr.EncodeToWithoutSignature(e)
+	upr.Signature.EncodeTo(e)
+}
+
+// EncodeToWithoutSignature does the same as EncodeTo but
+// leaves the signature out.
+func (upr *uploadPartRequest) EncodeToWithoutSignature(e *types.Encoder) {
+	e.Write(upr.PubKey[:])
+	e.Write(upr.UploadID[:])
+	e.WriteUint64(uint64(upr.PartNumber))
+}
+
+// DecodeFrom implements types.ProtocolObject.
+func (upr *uploadPartRequest) DecodeFrom(d *types.Decoder) {
+	// Nothing to do here.
+}
+
+// completeMultipartRequest is used to complete an S3 multipart upload.
+type completeMultipartRequest struct {
+	PubKey    types.PublicKey
+	UploadID  types.Hash256
+	Signature types.Signature
+}
+
+// EncodeTo implements types.ProtocolObject.
+func (cmr *completeMultipartRequest) EncodeTo(e *types.Encoder) {
+	cmr.EncodeToWithoutSignature(e)
+	cmr.Signature.EncodeTo(e)
+}
+
+// EncodeToWithoutSignature does the same as EncodeTo but
+// leaves the signature out.
+func (cmr *completeMultipartRequest) EncodeToWithoutSignature(e *types.Encoder) {
+	e.Write(cmr.PubKey[:])
+	e.Write(cmr.UploadID[:])
+}
+
+// DecodeFrom implements types.ProtocolObject.
+func (cmr *completeMultipartRequest) DecodeFrom(d *types.Decoder) {
+	// Nothing to do here.
 }

@@ -37,9 +37,10 @@ type UpdateRevisionRequest struct {
 
 // Config contains the satellite configuration parameters.
 type Config struct {
-	Enabled bool `json:"enabled"`
-	SatelliteInfo
+	Enabled       bool                 `json:"enabled"`
+	Encrypt       bool                 `json:"encrypt"`
 	EncryptionKey object.EncryptionKey `json:"encryptionKey"`
+	SatelliteInfo
 }
 
 // SatelliteInfo contains the information about the satellite.
@@ -53,6 +54,18 @@ type SatelliteInfo struct {
 // SatellitesAllResponse is the response type for the /satellites request.
 type SatellitesAllResponse struct {
 	Satellites map[types.PublicKey]SatelliteInfo `json:"satellites"`
+}
+
+// ObjectPutRequest is the request type for the PUT /object requests.
+type ObjectPutRequest struct {
+	Bucket string   `json:"bucket"`
+	Parts  []uint64 `json:"parts"`
+}
+
+// ObjectResponse is the response type for the GET /object request.
+type ObjectResponse struct {
+	Found bool     `json:"found"`
+	Parts []uint64 `json:"parts"`
 }
 
 // FormContractRequest is the request type for the FormContract RPC.
@@ -85,19 +98,20 @@ type RenterSettings struct {
 
 // FileMetadata contains the uploaded file metadata.
 type FileMetadata struct {
-	Key          object.EncryptionKey `json:"key"`
-	Bucket       string               `json:"bucket"`
-	Path         string               `json:"path"`
-	ETag         string               `json:"etag"`
-	MimeType     string               `json:"mime"`
-	Slabs        []object.SlabSlice   `json:"slabs"`
-	PartialSlabs []object.PartialSlab `json:"partialSlabs"`
-	Data         []byte               `json:"data"`
+	Key      object.EncryptionKey `json:"key"`
+	Bucket   string               `json:"bucket"`
+	Path     string               `json:"path"`
+	ETag     string               `json:"etag"`
+	MimeType string               `json:"mime"`
+	Parts    []uint64             `json:"parts"`
+	Slabs    []object.SlabSlice   `json:"slabs"`
+	Data     []byte               `json:"data"`
 }
 
 // SaveMetadataRequest is the request type for the SaveMetadata RPC.
 type SaveMetadataRequest struct {
 	Metadata FileMetadata `json:"metadata"`
+	New      bool         `json:"new"`
 }
 
 // UpdateSlabRequest is the request type for the UpdateSlab RPC.
@@ -110,4 +124,17 @@ type UpdateSlabRequest struct {
 type BucketFiles struct {
 	Name  string   `json:"name"`
 	Paths []string `json:"paths"`
+}
+
+// CreateMultipartRequest is the request type for the CreateMultipart RPC.
+type CreateMultipartRequest struct {
+	Key      object.EncryptionKey `json:"key"`
+	Bucket   string               `json:"bucket"`
+	Path     string               `json:"path"`
+	MimeType string               `json:"mime"`
+}
+
+// CreateMultipartResponse is the response type for the CreateMultipart RPC.
+type CreateMultipartResponse struct {
+	UploadID string `json:"uploadID"`
 }

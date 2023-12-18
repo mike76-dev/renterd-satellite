@@ -3,12 +3,14 @@ package satellite
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"mime"
 	"net"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,6 +21,7 @@ import (
 	"go.sia.tech/jape"
 	"go.sia.tech/renterd/api"
 	"go.sia.tech/renterd/object"
+	"go.sia.tech/renterd/satellite/encrypt"
 
 	"golang.org/x/crypto/blake2b"
 )
@@ -30,20 +33,24 @@ const (
 )
 
 var (
-	specifierRequestContracts = types.NewSpecifier("RequestContracts")
-	specifierFormContracts    = types.NewSpecifier("FormContracts")
-	specifierRenewContracts   = types.NewSpecifier("RenewContracts")
-	specifierUpdateRevision   = types.NewSpecifier("UpdateRevision")
-	specifierFormContract     = types.NewSpecifier("FormContract")
-	specifierRenewContract    = types.NewSpecifier("RenewContract")
-	specifierGetSettings      = types.NewSpecifier("GetSettings")
-	specifierUpdateSettings   = types.NewSpecifier("UpdateSettings")
-	specifierSaveMetadata     = types.NewSpecifier("SaveMetadata")
-	specifierRequestMetadata  = types.NewSpecifier("RequestMetadata")
-	specifierUpdateSlab       = types.NewSpecifier("UpdateSlab")
-	specifierRequestSlabs     = types.NewSpecifier("RequestSlabs")
-	specifierShareContracts   = types.NewSpecifier("ShareContracts")
-	specifierUploadFile       = types.NewSpecifier("UploadFile")
+	specifierRequestContracts  = types.NewSpecifier("RequestContracts")
+	specifierFormContracts     = types.NewSpecifier("FormContracts")
+	specifierRenewContracts    = types.NewSpecifier("RenewContracts")
+	specifierUpdateRevision    = types.NewSpecifier("UpdateRevision")
+	specifierFormContract      = types.NewSpecifier("FormContract")
+	specifierRenewContract     = types.NewSpecifier("RenewContract")
+	specifierGetSettings       = types.NewSpecifier("GetSettings")
+	specifierUpdateSettings    = types.NewSpecifier("UpdateSettings")
+	specifierSaveMetadata      = types.NewSpecifier("SaveMetadata")
+	specifierRequestMetadata   = types.NewSpecifier("RequestMetadata")
+	specifierUpdateSlab        = types.NewSpecifier("UpdateSlab")
+	specifierRequestSlabs      = types.NewSpecifier("RequestSlabs")
+	specifierShareContracts    = types.NewSpecifier("ShareContracts")
+	specifierUploadFile        = types.NewSpecifier("UploadFile")
+	specifierCreateMultipart   = types.NewSpecifier("CreateMultipart")
+	specifierAbortMultipart    = types.NewSpecifier("AbortMultipart")
+	specifierUploadPart        = types.NewSpecifier("UploadPart")
+	specifierCompleteMultipart = types.NewSpecifier("FinishMultipart")
 )
 
 // generateKeyPair generates the keypair from a given seed.
@@ -787,37 +794,39 @@ func (s *Satellite) transferMetadata(ctx context.Context) {
 				s.logger.Error(fmt.Sprintf("couldn't find object %s: %s", entry.Name, err))
 				continue
 			}
-			var data []byte
-			if len(resp.Object.PartialSlabs) > 0 {
-				ps := resp.Object.PartialSlabs[0]
-				data, err = s.bus.FetchPartialSlab(ctx, ps.Key, ps.Offset, ps.Length)
+			var partialSlabData []byte
+			for _, slab := range resp.Object.Slabs {
+				if !slab.IsPartial() {
+					continue
+				}
+				data, err := s.bus.FetchPartialSlab(ctx, slab.Key, slab.Offset, slab.Length)
 				if err != nil && strings.Contains(err.Error(), api.ErrObjectNotFound.Error()) {
 					// Check if the slab was already uploaded.
-					slab, err := s.bus.Slab(ctx, ps.Key)
+					ss, err := s.bus.Slab(ctx, slab.Key)
 					if err != nil {
 						s.logger.Error(fmt.Sprintf("failed to fetch uploaded partial slab: %v", err))
 						continue
 					}
 					resp.Object.Slabs = append(resp.Object.Slabs, object.SlabSlice{
-						Slab:   slab,
-						Offset: ps.Offset,
-						Length: ps.Length,
+						Slab:   ss,
+						Offset: slab.Offset,
+						Length: slab.Length,
 					})
 				} else if err != nil {
 					s.logger.Error(fmt.Sprintf("failed to fetch partial slab: %v", err))
 					continue
 				}
+				partialSlabData = append(partialSlabData, data...)
 			}
 			StaticSatellite.SaveMetadata(ctx, FileMetadata{
-				Key:          resp.Object.Key,
-				Bucket:       bucket.Name,
-				Path:         entry.Name,
-				ETag:         resp.Object.ETag,
-				MimeType:     resp.Object.MimeType,
-				Slabs:        resp.Object.Slabs,
-				PartialSlabs: resp.Object.PartialSlabs,
-				Data:         data,
-			})
+				Key:      resp.Object.Key,
+				Bucket:   bucket.Name,
+				Path:     entry.Name,
+				ETag:     resp.Object.ETag,
+				MimeType: resp.Object.MimeType,
+				Slabs:    resp.Object.Slabs,
+				Data:     partialSlabData,
+			}, false)
 		}
 	}
 }
@@ -836,32 +845,78 @@ func (s *Satellite) saveMetadataHandler(jc jape.Context) {
 
 	pk, sk := generateKeyPair(cfg.RenterSeed)
 
-	encryptedBucket, err := encodeString(cfg.EncryptionKey, fmr.Metadata.Bucket)
-	if jc.Check("couldn't encode bucket", err) != nil {
-		return
+	var encrypted string
+	parts, exists := s.store.getObject(fmr.Metadata.Bucket, strings.TrimPrefix(fmr.Metadata.Path, "/"))
+	if fmr.New {
+		if exists {
+			err := s.store.deleteObject(fmr.Metadata.Bucket, strings.TrimPrefix(fmr.Metadata.Path, "/"))
+			if jc.Check("couldn't delete old object information", err) != nil {
+				return
+			}
+		}
+		if cfg.Encrypt {
+			if len(fmr.Metadata.Parts) > 0 {
+				for i, part := range fmr.Metadata.Parts {
+					if i > 0 {
+						encrypted += ","
+					}
+					encrypted += fmt.Sprintf("%d", part)
+				}
+				err := s.store.addObject(fmr.Metadata.Bucket, strings.TrimPrefix(fmr.Metadata.Path, "/"), fmr.Metadata.Parts)
+				if jc.Check("couldn't save object information", err) != nil {
+					return
+				}
+			} else {
+				var length uint64
+				for _, slab := range fmr.Metadata.Slabs {
+					length += uint64(slab.Length)
+				}
+				encrypted = fmt.Sprintf("%d", length)
+				err := s.store.addObject(fmr.Metadata.Bucket, strings.TrimPrefix(fmr.Metadata.Path, "/"), []uint64{length})
+				if jc.Check("couldn't save object information", err) != nil {
+					return
+				}
+			}
+		}
+	} else if exists {
+		for i := range parts {
+			if i > 0 {
+				encrypted += ","
+			}
+			encrypted += fmt.Sprintf("%d", parts[i])
+		}
 	}
 
-	encryptedPath, err := encodeString(cfg.EncryptionKey, fmr.Metadata.Path)
-	if jc.Check("couldn't encode path", err) != nil {
-		return
-	}
-
-	encryptedMimeType, err := encodeString(cfg.EncryptionKey, fmr.Metadata.MimeType)
-	if jc.Check("couldn't encode MIME type", err) != nil {
-		return
+	encryptedBucket := []byte(fmr.Metadata.Bucket)
+	encryptedPath := []byte(fmr.Metadata.Path)
+	encryptedMimeType := []byte(fmr.Metadata.MimeType)
+	var err error
+	if cfg.Encrypt {
+		encryptedBucket, err = encodeString(cfg.EncryptionKey, fmr.Metadata.Bucket)
+		if jc.Check("couldn't encode bucket", err) != nil {
+			return
+		}
+		encryptedPath, err = encodeString(cfg.EncryptionKey, fmr.Metadata.Path)
+		if jc.Check("couldn't encode path", err) != nil {
+			return
+		}
+		encryptedMimeType, err = encodeString(cfg.EncryptionKey, fmr.Metadata.MimeType)
+		if jc.Check("couldn't encode MIME type", err) != nil {
+			return
+		}
 	}
 
 	smr := saveMetadataRequest{
 		PubKey: pk,
 		Metadata: encodedFileMetadata{
-			Key:          fmr.Metadata.Key,
-			Bucket:       encryptedBucket,
-			Path:         encryptedPath,
-			ETag:         fmr.Metadata.ETag,
-			MimeType:     encryptedMimeType,
-			Slabs:        fmr.Metadata.Slabs,
-			PartialSlabs: fmr.Metadata.PartialSlabs,
-			Data:         fmr.Metadata.Data,
+			Key:       fmr.Metadata.Key,
+			Bucket:    encryptedBucket,
+			Path:      encryptedPath,
+			ETag:      fmr.Metadata.ETag,
+			MimeType:  encryptedMimeType,
+			Encrypted: encrypted,
+			Slabs:     fmr.Metadata.Slabs,
+			Data:      fmr.Metadata.Data,
 		},
 	}
 
@@ -915,6 +970,28 @@ func (s *Satellite) saveMetadataHandler(jc jape.Context) {
 	}
 }
 
+// parseParts is a helper function that converts a comma-separated
+// number string to a number slice.
+func parseParts(s string) (parts []uint64) {
+	for len(s) > 0 {
+		i := strings.Index(s, ",")
+		if i < 0 {
+			i = len(s)
+		}
+		num, err := strconv.ParseUint(s[:i], 10, 64)
+		if err != nil {
+			return nil
+		}
+		parts = append(parts, num)
+		if len(s) > i+1 {
+			s = s[i+1:]
+		} else {
+			s = ""
+		}
+	}
+	return
+}
+
 // requestMetadataHandler handles the GET /metadata requests.
 func (s *Satellite) requestMetadataHandler(jc jape.Context) {
 	cfg := s.store.getConfig()
@@ -946,6 +1023,8 @@ func (s *Satellite) requestMetadataHandler(jc jape.Context) {
 	if jc.Check("couldn't get buckets", err) != nil {
 		return
 	}
+
+	objs := make(map[string][][]byte)
 	for _, bucket := range buckets {
 		resp, err := s.bus.ListObjects(ctx, bucket.Name, api.ListObjectOptions{
 			Limit: -1,
@@ -953,23 +1032,34 @@ func (s *Satellite) requestMetadataHandler(jc jape.Context) {
 		if jc.Check("couldn't requests present objects", err) != nil {
 			return
 		}
-		if len(resp.Objects) > 0 {
-			encryptedBucket, err := encodeString(cfg.EncryptionKey, bucket.Name)
-			if jc.Check("couldn't encode bucket", err) != nil {
-				return
-			}
-			bf := encodedBucketFiles{
-				Name: encryptedBucket,
-			}
-			for _, entry := range resp.Objects {
+
+		encryptedBucket, err := encodeString(cfg.EncryptionKey, bucket.Name)
+		if jc.Check("couldn't encode bucket", err) != nil {
+			return
+		}
+		for _, entry := range resp.Objects {
+			_, found := s.store.getObject(bucket.Name, strings.TrimPrefix(entry.Name, "/"))
+			if found {
 				encryptedPath, err := encodeString(cfg.EncryptionKey, entry.Name)
 				if jc.Check("couldn't encode path", err) != nil {
 					return
 				}
-				bf.Paths = append(bf.Paths, encryptedPath)
+				b := objs[string(encryptedBucket)]
+				b = append(b, encryptedPath)
+				objs[string(encryptedBucket)] = b
+			} else {
+				b := objs[bucket.Name]
+				b = append(b, []byte(entry.Name))
+				objs[bucket.Name] = b
 			}
-			rmr.PresentObjects = append(rmr.PresentObjects, bf)
 		}
+	}
+
+	for b, files := range objs {
+		rmr.PresentObjects = append(rmr.PresentObjects, encodedBucketFiles{
+			Name:  []byte(b),
+			Paths: files,
+		})
 	}
 
 	h := types.NewHasher()
@@ -982,44 +1072,58 @@ func (s *Satellite) requestMetadataHandler(jc jape.Context) {
 	}
 	addr := net.JoinHostPort(host, cfg.MuxPort)
 
-	var rf renterFiles
+	var metadata []encodedFileMetadata
 	err = withTransportV3(ctx, cfg.PublicKey, addr, func(t *rhpv3.Transport) (err error) {
 		stream := t.DialStream()
-		stream.SetDeadline(time.Now().Add(30 * time.Second))
-
+		stream.SetDeadline(time.Now().Add(5 * time.Second))
 		if err := stream.WriteRequest(specifierRequestMetadata, &rmr); err != nil {
 			return err
 		}
 
-		if err := stream.ReadResponse(&rf, 65536); err != nil {
-			return err
-		}
-
-		for i := range rf.metadata {
-			var resp uploadResponse
-			if jc.Check("couldn't read response", stream.ReadResponse(&resp, 1024)) != nil {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			stream.SetDeadline(time.Now().Add(30 * time.Second))
+			var rf renterFiles
+			if err := stream.ReadResponse(&rf, 1048576); err != nil {
 				return err
 			}
 
-			if resp.DataSize == 0 {
-				continue
+			start := len(metadata)
+			metadata = append(metadata, rf.metadata...)
+			for i := range rf.metadata {
+				var resp uploadResponse
+				if jc.Check("couldn't read response", stream.ReadResponse(&resp, 1024)) != nil {
+					return err
+				}
+
+				if resp.DataSize == 0 {
+					continue
+				}
+
+				ud := uploadData{
+					More: true,
+				}
+				maxLen := uint64(1048576) + 8 + 1
+				offset := 0
+				for ud.More {
+					if jc.Check("couldn't read data", stream.ReadResponse(&ud, maxLen)) != nil {
+						return err
+					}
+					copy(metadata[start+i].Data[offset:], ud.Data)
+					offset += len(ud.Data)
+					resp.DataSize = uint64(len(ud.Data))
+					if jc.Check("couldn't write response", stream.WriteResponse(&resp)) != nil {
+						return err
+					}
+				}
 			}
 
-			ud := uploadData{
-				More: true,
-			}
-			maxLen := uint64(1048576) + 8 + 1
-			offset := 0
-			for ud.More {
-				if jc.Check("couldn't read data", stream.ReadResponse(&ud, maxLen)) != nil {
-					return err
-				}
-				copy(rf.metadata[i].Data[offset:], ud.Data)
-				offset += len(ud.Data)
-				resp.DataSize = uint64(len(ud.Data))
-				if jc.Check("couldn't write response", stream.WriteResponse(&resp)) != nil {
-					return err
-				}
+			if !rf.more {
+				break
 			}
 		}
 
@@ -1037,35 +1141,48 @@ func (s *Satellite) requestMetadataHandler(jc jape.Context) {
 	}
 
 	var objects []object.Object
-	for _, fm := range rf.metadata {
+	for _, fm := range metadata {
 		obj := object.Object{
-			Key:          fm.Key,
-			Slabs:        fm.Slabs,
-			PartialSlabs: fm.PartialSlabs,
+			Key: fm.Key,
 		}
 		h2c := make(map[types.PublicKey]types.FileContractID)
 		for _, c := range contracts {
 			h2c[c.HostKey] = c.ID
 		}
 		used := make(map[types.PublicKey]types.FileContractID)
-		for _, s := range obj.Slabs {
+		for _, s := range fm.Slabs {
 			for _, ss := range s.Shards {
 				used[ss.LatestHost] = h2c[ss.LatestHost]
 			}
 		}
-		bucket, err := decodeString(cfg.EncryptionKey, fm.Bucket)
-		if err != nil {
-			s.logger.Error(fmt.Sprintf("couldn't decode bucket: %s", err))
-			continue
+		bucket := string(fm.Bucket)
+		path := string(fm.Path)
+		mimeType := string(fm.MimeType)
+		parts := parseParts(fm.Encrypted)
+		if len(parts) > 0 {
+			bucket, err = decodeString(cfg.EncryptionKey, fm.Bucket)
+			if err != nil {
+				s.logger.Error(fmt.Sprintf("couldn't decode bucket: %s", err))
+				continue
+			}
+			path, err = decodeString(cfg.EncryptionKey, fm.Path)
+			if err != nil {
+				s.logger.Error(fmt.Sprintf("couldn't decode path: %s", err))
+				continue
+			}
+			mimeType, err = decodeString(cfg.EncryptionKey, fm.MimeType)
+			if err != nil {
+				s.logger.Error(fmt.Sprintf("couldn't decode MIME type: %s", err))
+				continue
+			}
+			err = s.store.addObject(bucket, strings.TrimPrefix(path, "/"), parts)
+			if jc.Check("couldn't save object information", err) != nil {
+				return
+			}
 		}
-		path, err := decodeString(cfg.EncryptionKey, fm.Path)
-		if err != nil {
-			s.logger.Error(fmt.Sprintf("couldn't decode path: %s", err))
-			continue
-		}
-		mimeType, err := decodeString(cfg.EncryptionKey, fm.MimeType)
-		if err != nil {
-			s.logger.Error(fmt.Sprintf("couldn't decode MIME type: %s", err))
+
+		// Check if the object is a directory.
+		if strings.HasSuffix(path, "/") {
 			continue
 		}
 
@@ -1085,30 +1202,36 @@ func (s *Satellite) requestMetadataHandler(jc jape.Context) {
 				continue
 			}
 		}
+		var ms, ts int
 		if len(fm.Data) > 0 {
 			// Deduct redundancy params from the first slab. If there are
 			// no complete slabs, use the current redundancy settings.
-			ms := gp.RedundancySettings.MinShards
-			ts := gp.RedundancySettings.TotalShards
+			ms = gp.RedundancySettings.MinShards
+			ts = gp.RedundancySettings.TotalShards
 			if len(fm.Slabs) > 0 {
 				ms = int(fm.Slabs[0].MinShards)
 				ts = len(fm.Slabs[0].Shards)
 			}
-			ps, _, err := s.bus.AddPartialSlab(ctx, fm.Data, uint8(ms), uint8(ts), set)
-			if err != nil {
-				s.logger.Error(fmt.Sprintf("couldn't add partial slab: %s", err))
-				continue
-			}
-			obj.PartialSlabs = ps
 		}
-		for i, slab := range obj.Slabs {
-			for j, shard := range slab.Shards {
-				shard.Contracts = map[types.PublicKey][]types.FileContractID{
-					shard.LatestHost: {
-						used[shard.LatestHost],
-					},
+		for _, slab := range fm.Slabs {
+			if slab.IsPartial() {
+				ps, _, err := s.bus.AddPartialSlab(ctx, fm.Data[:slab.Length], uint8(ms), uint8(ts), set)
+				if err != nil {
+					s.logger.Error(fmt.Sprintf("couldn't add partial slab: %s", err))
+					continue
 				}
-				obj.Slabs[i].Shards[j] = shard
+				obj.Slabs = append(obj.Slabs, ps...)
+				fm.Data = fm.Data[slab.Length:]
+			} else {
+				for i, shard := range slab.Shards {
+					shard.Contracts = map[types.PublicKey][]types.FileContractID{
+						shard.LatestHost: {
+							used[shard.LatestHost],
+						},
+					}
+					slab.Shards[i] = shard
+				}
+				obj.Slabs = append(obj.Slabs, slab)
 			}
 		}
 		if err := s.bus.AddObject(ctx, bucket, path, set, obj, api.AddObjectOptions{
@@ -1157,7 +1280,7 @@ func (s *Satellite) updateSlabHandler(jc jape.Context) {
 
 		var resp rhpv2.RPCError
 		err = t.ReadResponse(&resp, 1024)
-		if jc.Check("could not read response", err) != nil {
+		if err != nil {
 			return
 		}
 
@@ -1167,8 +1290,7 @@ func (s *Satellite) updateSlabHandler(jc jape.Context) {
 
 		return nil
 	})
-
-	if jc.Check("couldn't update slab", err) != nil {
+	if err != nil {
 		s.logger.Error(fmt.Sprintf("couldn't update slab: %s", err))
 	}
 }
@@ -1216,14 +1338,34 @@ func (s *Satellite) requestSlabsHandler(jc jape.Context) {
 		return
 	}
 
+	contracts, err := s.bus.ContractSetContracts(ctx, set)
+	if jc.Check("couldn't fetch contracts from bus", err) != nil {
+		return
+	}
+
+	h2c := make(map[types.PublicKey]types.FileContractID)
+	for _, c := range contracts {
+		h2c[c.HostKey] = c.ID
+	}
+
+	var numSlabs int
 	for _, slab := range ms.slabs {
+		for i, shard := range slab.Shards {
+			shard.Contracts = map[types.PublicKey][]types.FileContractID{
+				shard.LatestHost: {
+					h2c[shard.LatestHost],
+				},
+			}
+			slab.Shards[i] = shard
+		}
 		if err := s.bus.UpdateSlab(ctx, slab, set); err != nil {
 			s.logger.Error(fmt.Sprintf("couldn't update slab: %s", err))
 			continue
 		}
+		numSlabs++
 	}
 
-	s.logger.Info(fmt.Sprintf("successfully updated %d slabs", len(ms.slabs)))
+	s.logger.Info(fmt.Sprintf("successfully updated %d slabs", numSlabs))
 	jc.Encode(ms.slabs)
 }
 
@@ -1318,33 +1460,39 @@ func UploadObject(r io.Reader, bucket, path, mimeType string) error {
 		}
 	}
 
-	cr, err := cfg.EncryptionKey.Encrypt(r, 0)
-	if err != nil {
-		return err
+	if cfg.Encrypt {
+		r, err = encrypt.Encrypt(r, cfg.EncryptionKey)
+		if err != nil {
+			return err
+		}
 	}
 
 	pk, sk := generateKeyPair(cfg.RenterSeed)
 
-	encryptedBucket, err := encodeString(cfg.EncryptionKey, bucket)
-	if err != nil {
-		return errors.New("couldn't encode bucket")
-	}
-
-	encryptedPath, err := encodeString(cfg.EncryptionKey, path)
-	if err != nil {
-		return errors.New("couldn't encode path")
-	}
-
-	encryptedMimeType, err := encodeString(cfg.EncryptionKey, mimeType)
-	if err != nil {
-		return errors.New("couldn't encode MIME type")
+	encryptedBucket := []byte(bucket)
+	encryptedPath := []byte(path)
+	encryptedMimeType := []byte(mimeType)
+	if cfg.Encrypt {
+		encryptedBucket, err = encodeString(cfg.EncryptionKey, bucket)
+		if err != nil {
+			return err
+		}
+		encryptedPath, err = encodeString(cfg.EncryptionKey, path)
+		if err != nil {
+			return err
+		}
+		encryptedMimeType, err = encodeString(cfg.EncryptionKey, mimeType)
+		if err != nil {
+			return err
+		}
 	}
 
 	req := uploadRequest{
-		PubKey:   pk,
-		Bucket:   encryptedBucket,
-		Path:     encryptedPath,
-		MimeType: encryptedMimeType,
+		PubKey:    pk,
+		Bucket:    encryptedBucket,
+		Path:      encryptedPath,
+		MimeType:  encryptedMimeType,
+		Encrypted: cfg.Encrypt,
 	}
 	h := types.NewHasher()
 	req.EncodeToWithoutSignature(h.E)
@@ -1377,7 +1525,7 @@ func UploadObject(r io.Reader, bucket, path, mimeType string) error {
 		incompleteChunk := resp.DataSize % dataLen
 		completeChunks := resp.DataSize - incompleteChunk
 		for total < completeChunks {
-			_, err := io.ReadFull(cr, buf)
+			_, err := io.ReadFull(r, buf)
 			if err != nil {
 				return stream.WriteResponse(&ud)
 			}
@@ -1385,7 +1533,7 @@ func UploadObject(r io.Reader, bucket, path, mimeType string) error {
 		}
 		if incompleteChunk > 0 {
 			buf := make([]byte, incompleteChunk)
-			_, err := io.ReadFull(cr, buf)
+			_, err := io.ReadFull(r, buf)
 			if err != nil {
 				return stream.WriteResponse(&ud)
 			}
@@ -1393,7 +1541,7 @@ func UploadObject(r io.Reader, bucket, path, mimeType string) error {
 
 		for {
 			stream.SetDeadline(time.Now().Add(30 * time.Second))
-			numBytes, err := io.ReadFull(cr, buf)
+			numBytes, err := io.ReadFull(r, buf)
 			if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 				return err
 			}
@@ -1417,42 +1565,292 @@ func UploadObject(r io.Reader, bucket, path, mimeType string) error {
 }
 
 // encodeString encrypts a string with the encryption key.
-func encodeString(key object.EncryptionKey, str string) (ciphertext [255]byte, err error) {
-	if len(str) > 255 {
-		err = errors.New("string length exceeds 255 bytes")
-		return
-	}
-
-	var plaintext [255]byte
-	copy(plaintext[:], []byte(str))
-	rs, err := key.Encrypt(bytes.NewReader(plaintext[:]), 0)
+func encodeString(key object.EncryptionKey, str string) (ciphertext []byte, err error) {
+	rs, err := encrypt.Encrypt(bytes.NewReader([]byte(str)), key)
 	if err != nil {
 		return
 	}
 
-	ct, err := io.ReadAll(rs)
-	if err != nil {
-		return
-	}
-
-	copy(ciphertext[:], ct)
+	ciphertext, err = io.ReadAll(rs)
 	return
 }
 
 // decodeString decrypts a string encrypted with the encryption key.
-func decodeString(key object.EncryptionKey, ciphertext [255]byte) (string, error) {
+func decodeString(key object.EncryptionKey, ciphertext []byte) (string, error) {
 	var out bytes.Buffer
-	ws := key.Decrypt(&out, 0)
-	_, err := ws.Write(ciphertext[:])
+	ws, err := encrypt.Decrypt(&out, key, nil)
 	if err != nil {
 		return "", err
 	}
 
-	b := out.Bytes()
-	i := bytes.Index(b, []byte{0})
-	if i < 0 {
-		i = len(b)
+	_, err = ws.Write(ciphertext)
+	if err != nil {
+		return "", err
 	}
 
-	return string(b[:i]), nil
+	return out.String(), nil
+}
+
+// createMultipartHandler handles the POST /multipart/create requests.
+func (s *Satellite) createMultipartHandler(jc jape.Context) {
+	cfg := s.store.getConfig()
+	if !cfg.Enabled {
+		s.logger.Error("couldn't register multipart upload: satellite disabled")
+		jc.Check("ERROR", errors.New("satellite disabled"))
+		return
+	}
+	ctx := jc.Request.Context()
+	var req CreateMultipartRequest
+	if jc.Decode(&req) != nil {
+		return
+	}
+
+	pk, sk := generateKeyPair(cfg.RenterSeed)
+
+	encryptedBucket := []byte(req.Bucket)
+	encryptedPath := []byte(req.Path)
+	encryptedMimeType := []byte(req.MimeType)
+	var err error
+	if cfg.Encrypt {
+		encryptedBucket, err = encodeString(cfg.EncryptionKey, req.Bucket)
+		if jc.Check("couldn't encode bucket", err) != nil {
+			return
+		}
+		encryptedPath, err = encodeString(cfg.EncryptionKey, req.Path)
+		if jc.Check("couldn't encode path", err) != nil {
+			return
+		}
+		encryptedMimeType, err = encodeString(cfg.EncryptionKey, req.MimeType)
+		if jc.Check("couldn't encode MIME type", err) != nil {
+			return
+		}
+	}
+
+	rmr := registerMultipartRequest{
+		PubKey:    pk,
+		Key:       req.Key,
+		Bucket:    encryptedBucket,
+		Path:      encryptedPath,
+		MimeType:  encryptedMimeType,
+		Encrypted: cfg.Encrypt,
+	}
+
+	h := types.NewHasher()
+	rmr.EncodeToWithoutSignature(h.E)
+	rmr.Signature = sk.SignHash(h.Sum())
+
+	var resp registerMultipartResponse
+	err = withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
+		if err := t.WriteRequest(specifierCreateMultipart, &rmr); err != nil {
+			return err
+		}
+
+		if err := t.ReadResponse(&resp, 1024); err != nil {
+			return err
+		}
+
+		return nil
+	})
+
+	if jc.Check("couldn't register multipart upload", err) != nil {
+		s.logger.Error(fmt.Sprintf("couldn't register multipart upload: %s", err))
+		return
+	}
+
+	response := CreateMultipartResponse{
+		UploadID: hex.EncodeToString(resp.UploadID[:]),
+	}
+
+	s.logger.Debug(fmt.Sprintf("successfully registered multipart upload %s", response.UploadID))
+	jc.Encode(response)
+}
+
+// abortMultipartHandler handles the POST /multipart/abort requests.
+func (s *Satellite) abortMultipartHandler(jc jape.Context) {
+	cfg := s.store.getConfig()
+	if !cfg.Enabled {
+		s.logger.Error("couldn't delete multipart upload: satellite disabled")
+		jc.Check("ERROR", errors.New("satellite disabled"))
+		return
+	}
+	ctx := jc.Request.Context()
+	var req CreateMultipartResponse
+	if jc.Decode(&req) != nil {
+		return
+	}
+	id, err := hex.DecodeString(req.UploadID)
+	if jc.Check("couldn't marshal upload ID", err) != nil {
+		s.logger.Error(fmt.Sprintf("couldn't marshal upload ID: %s", err))
+		return
+	}
+
+	pk, sk := generateKeyPair(cfg.RenterSeed)
+
+	dmr := deleteMultipartRequest{
+		PubKey: pk,
+	}
+	copy(dmr.UploadID[:], id)
+
+	h := types.NewHasher()
+	dmr.EncodeToWithoutSignature(h.E)
+	dmr.Signature = sk.SignHash(h.Sum())
+
+	err = withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
+		if err := t.WriteRequest(specifierAbortMultipart, &dmr); err != nil {
+			return err
+		}
+
+		var resp rhpv2.RPCError
+		if err := t.ReadResponse(&resp, 1024); err != nil {
+			return err
+		}
+
+		if resp.Description != "" {
+			return errors.New(resp.Description)
+		}
+
+		return nil
+	})
+
+	if jc.Check("couldn't delete multipart upload", err) != nil {
+		s.logger.Error(fmt.Sprintf("couldn't delete multipart upload: %s", err))
+		return
+	}
+
+	s.logger.Debug(fmt.Sprintf("multipart upload %s aborted", req.UploadID))
+}
+
+// UploadPart uploads a part of an S3 multipart upload to the satellite.
+func UploadPart(r io.Reader, id string, part int) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg, err := StaticSatellite.Config()
+	if err != nil {
+		return err
+	}
+	if !cfg.Enabled {
+		return errors.New("couldn't upload part: satellite disabled")
+	}
+
+	if cfg.Encrypt {
+		r, err = encrypt.Encrypt(r, cfg.EncryptionKey)
+		if err != nil {
+			return err
+		}
+	}
+
+	pk, sk := generateKeyPair(cfg.RenterSeed)
+
+	uid, err := hex.DecodeString(id)
+	if err != nil {
+		return err
+	}
+
+	req := uploadPartRequest{
+		PubKey:     pk,
+		PartNumber: part,
+	}
+	copy(req.UploadID[:], uid)
+	h := types.NewHasher()
+	req.EncodeToWithoutSignature(h.E)
+	req.Signature = sk.SignHash(h.Sum())
+
+	host, _, err := net.SplitHostPort(cfg.Address)
+	if err != nil {
+		return err
+	}
+	addr := net.JoinHostPort(host, cfg.MuxPort)
+
+	err = withTransportV3(ctx, cfg.PublicKey, addr, func(t *rhpv3.Transport) (err error) {
+		stream := t.DialStream()
+		stream.SetDeadline(time.Now().Add(5 * time.Second))
+		err = stream.WriteRequest(specifierUploadPart, &req)
+		if err != nil {
+			return err
+		}
+
+		dataLen := uint64(1048576)
+		buf := make([]byte, dataLen)
+		var resp uploadResponse
+		var ud uploadData
+
+		for {
+			stream.SetDeadline(time.Now().Add(30 * time.Second))
+			numBytes, err := io.ReadFull(r, buf)
+			if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+				return err
+			}
+			ud.Data = buf[:numBytes]
+			ud.More = err == nil
+			if err := stream.WriteResponse(&ud); err != nil {
+				return err
+			}
+			if err := stream.ReadResponse(&resp, 1024); err != nil {
+				return err
+			}
+			if !ud.More {
+				break
+			}
+		}
+
+		return nil
+	})
+
+	return err
+}
+
+// completeMultipartHandler handles the POST /multipart/complete requests.
+func (s *Satellite) completeMultipartHandler(jc jape.Context) {
+	cfg := s.store.getConfig()
+	if !cfg.Enabled {
+		s.logger.Error("couldn't complete multipart upload: satellite disabled")
+		jc.Check("ERROR", errors.New("satellite disabled"))
+		return
+	}
+	ctx := jc.Request.Context()
+	var req CreateMultipartResponse
+	if jc.Decode(&req) != nil {
+		return
+	}
+	id, err := hex.DecodeString(req.UploadID)
+	if jc.Check("couldn't marshal upload ID", err) != nil {
+		s.logger.Error(fmt.Sprintf("couldn't marshal upload ID: %s", err))
+		return
+	}
+
+	pk, sk := generateKeyPair(cfg.RenterSeed)
+
+	cmr := completeMultipartRequest{
+		PubKey: pk,
+	}
+	copy(cmr.UploadID[:], id)
+
+	h := types.NewHasher()
+	cmr.EncodeToWithoutSignature(h.E)
+	cmr.Signature = sk.SignHash(h.Sum())
+
+	err = withTransportV2(ctx, cfg.PublicKey, cfg.Address, func(t *rhpv2.Transport) (err error) {
+		if err := t.WriteRequest(specifierCompleteMultipart, &cmr); err != nil {
+			return err
+		}
+
+		var resp rhpv2.RPCError
+		if err := t.ReadResponse(&resp, 1024); err != nil {
+			return err
+		}
+
+		if resp.Description != "" {
+			return errors.New(resp.Description)
+		}
+
+		return nil
+	})
+
+	if jc.Check("couldn't complete multipart upload", err) != nil {
+		s.logger.Error(fmt.Sprintf("couldn't complete multipart upload: %s", err))
+		return
+	}
+
+	s.logger.Debug(fmt.Sprintf("multipart upload %s completed", req.UploadID))
 }

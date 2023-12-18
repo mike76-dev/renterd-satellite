@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	rhpv2 "go.sia.tech/core/rhp/v2"
@@ -30,7 +31,7 @@ type autopilotClient interface {
 type busClient interface {
 	AddContract(ctx context.Context, c rhpv2.ContractRevision, contractPrice, totalCost types.Currency, startHeight uint64, state string) (api.ContractMetadata, error)
 	AddObject(ctx context.Context, bucket, path, contractSet string, o object.Object, opts api.AddObjectOptions) error
-	AddPartialSlab(ctx context.Context, data []byte, minShards, totalShards uint8, contractSet string) (slabs []object.PartialSlab, slabBufferMaxSizeSoftReached bool, err error)
+	AddPartialSlab(ctx context.Context, data []byte, minShards, totalShards uint8, contractSet string) (slabs []object.SlabSlice, slabBufferMaxSizeSoftReached bool, err error)
 	AddRenewedContract(ctx context.Context, c rhpv2.ContractRevision, contractPrice, totalCost types.Currency, startHeight uint64, renewedFrom types.FileContractID, state string) (api.ContractMetadata, error)
 	Bucket(ctx context.Context, bucketName string) (resp api.Bucket, err error)
 	Contract(ctx context.Context, id types.FileContractID) (api.ContractMetadata, error)
@@ -199,27 +200,75 @@ func (s *Satellite) satellitesHandlerGET(jc jape.Context) {
 	jc.Encode(sar)
 }
 
+// objectHandlerGET handles the GET /object requests.
+func (s *Satellite) objectHandlerGET(jc jape.Context) {
+	var bucket string
+	if jc.DecodeForm("bucket", &bucket) != nil {
+		return
+	}
+	parts, exists := s.store.getObject(bucket, strings.TrimPrefix(jc.PathParam("path"), "/"))
+	or := ObjectResponse{
+		Found: exists,
+		Parts: parts,
+	}
+	jc.Encode(or)
+}
+
+// objectHandlerPUT handles the PUT /object request.
+func (s *Satellite) objectHandlerPUT(jc jape.Context) {
+	var opr ObjectPutRequest
+	if jc.Decode(&opr) != nil {
+		return
+	}
+	jc.Check("failed to add object to the store", s.store.addObject(opr.Bucket, strings.TrimPrefix(jc.PathParam("path"), "/"), opr.Parts))
+}
+
+// objectHandlerDELETE handles the DELETE /object request.
+func (s *Satellite) objectHandlerDELETE(jc jape.Context) {
+	var bucket string
+	if jc.DecodeForm("bucket", &bucket) != nil {
+		return
+	}
+	jc.Check("failed to delete object from the store", s.store.deleteObject(bucket, strings.TrimPrefix(jc.PathParam("path"), "/")))
+}
+
+// objectsHandlerDELETE handles the DELETE /objects request.
+func (s *Satellite) objectsHandlerDELETE(jc jape.Context) {
+	var bucket string
+	if jc.DecodeForm("bucket", &bucket) != nil {
+		return
+	}
+	jc.Check("failed to delete objects from the store", s.store.deleteObjects(bucket, strings.TrimPrefix(jc.PathParam("path"), "/")))
+}
+
 // Handler returns an HTTP handler that serves the satellite API.
 func (s *Satellite) Handler() http.Handler {
 	return jape.Mux(map[string]jape.Handler{
-		"GET    /request":       s.requestContractsHandler,
-		"POST   /contracts":     s.shareContractsHandler,
-		"POST   /form":          s.formContractsHandler,
-		"POST   /renew":         s.renewContractsHandler,
-		"POST   /update":        s.updateRevisionHandler,
-		"GET    /config":        s.configHandlerGET,
-		"PUT    /config":        s.configHandlerPUT,
-		"PUT    /satellite":     s.satelliteHandlerPUT,
-		"GET    /satellite/:id": s.satelliteHandlerGET,
-		"GET    /satellites":    s.satellitesHandlerGET,
-		"POST   /rspv2/form":    s.formContractHandler,
-		"POST   /rspv2/renew":   s.renewContractHandler,
-		"GET    /settings":      s.settingsHandlerGET,
-		"POST   /settings":      s.settingsHandlerPOST,
-		"POST   /metadata":      s.saveMetadataHandler,
-		"GET    /metadata/:set": s.requestMetadataHandler,
-		"GET    /slabs/:set":    s.requestSlabsHandler,
-		"POST   /slab":          s.updateSlabHandler,
+		"GET    /request":            s.requestContractsHandler,
+		"POST   /contracts":          s.shareContractsHandler,
+		"POST   /form":               s.formContractsHandler,
+		"POST   /renew":              s.renewContractsHandler,
+		"POST   /update":             s.updateRevisionHandler,
+		"GET    /config":             s.configHandlerGET,
+		"PUT    /config":             s.configHandlerPUT,
+		"PUT    /satellite":          s.satelliteHandlerPUT,
+		"GET    /satellite/:id":      s.satelliteHandlerGET,
+		"GET    /satellites":         s.satellitesHandlerGET,
+		"GET    /object/*path":       s.objectHandlerGET,
+		"PUT    /object/*path":       s.objectHandlerPUT,
+		"DELETE /object/*path":       s.objectHandlerDELETE,
+		"DELETE /objects/*path":      s.objectsHandlerDELETE,
+		"POST   /rspv2/form":         s.formContractHandler,
+		"POST   /rspv2/renew":        s.renewContractHandler,
+		"GET    /settings":           s.settingsHandlerGET,
+		"POST   /settings":           s.settingsHandlerPOST,
+		"POST   /metadata":           s.saveMetadataHandler,
+		"GET    /metadata/:set":      s.requestMetadataHandler,
+		"GET    /slabs/:set":         s.requestSlabsHandler,
+		"POST   /slab":               s.updateSlabHandler,
+		"POST   /multipart/create":   s.createMultipartHandler,
+		"POST   /multipart/abort":    s.abortMultipartHandler,
+		"POST   /multipart/complete": s.completeMultipartHandler,
 	})
 }
 
