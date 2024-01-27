@@ -173,12 +173,7 @@ func (s *jsonStore) load() error {
 	if p.EncryptedObjects != nil {
 		s.encryptedObjects = p.EncryptedObjects
 	}
-	if s.config.EncryptionKey == (object.EncryptionKey{}) {
-		s.config.EncryptionKey = object.GenerateEncryptionKey()
-		return s.save()
-	}
-
-	return nil
+	return s.save()
 }
 
 // setConfig updates the satellite config.
@@ -216,12 +211,12 @@ func newJSONStore(dir string) (*jsonStore, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
-
 	s := &jsonStore{
 		ephemeralStore: newEphemeralStore(),
 		dir:            dir,
 		lastSave:       time.Now(),
 	}
+	s.config.EncryptionKey = object.GenerateEncryptionKey()
 	err := s.load()
 	if err != nil {
 		return nil, err
