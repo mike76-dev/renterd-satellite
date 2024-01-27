@@ -35,7 +35,7 @@ type busClient interface {
 	AddRenewedContract(ctx context.Context, c rhpv2.ContractRevision, contractPrice, totalCost types.Currency, startHeight uint64, renewedFrom types.FileContractID, state string) (api.ContractMetadata, error)
 	Bucket(ctx context.Context, bucketName string) (resp api.Bucket, err error)
 	Contract(ctx context.Context, id types.FileContractID) (api.ContractMetadata, error)
-	Contracts(ctx context.Context) ([]api.ContractMetadata, error)
+	Contracts(ctx context.Context, opts api.ContractsOpts) (contracts []api.ContractMetadata, err error)
 	ContractSetContracts(ctx context.Context, set string) (contracts []api.ContractMetadata, err error)
 	CreateBucket(ctx context.Context, bucketName string, opts api.CreateBucketOptions) error
 	DeleteObject(ctx context.Context, bucket, path string, opts api.DeleteObjectOptions) error

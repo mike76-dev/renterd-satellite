@@ -113,7 +113,7 @@ func (s *Satellite) requestContractsHandler(jc jape.Context) {
 	var contracts []types.FileContractID
 	fcids := make(map[types.FileContractID]struct{})
 
-	existing, _ := s.bus.Contracts(ctx)
+	existing, _ := s.bus.Contracts(ctx, api.ContractsOpts{})
 	for _, c := range existing {
 		contracts = append(contracts, c.ID)
 		fcids[c.ID] = struct{}{}
@@ -245,7 +245,7 @@ func (s *Satellite) formContractsHandler(jc jape.Context) {
 	var added []api.ContractMetadata
 	var contracts []types.FileContractID
 
-	existing, _ := s.bus.Contracts(ctx)
+	existing, _ := s.bus.Contracts(ctx, api.ContractsOpts{})
 	for _, c := range existing {
 		contracts = append(contracts, c.ID)
 	}
@@ -525,7 +525,7 @@ func (s *Satellite) formContractHandler(jc jape.Context) {
 
 	var contracts []types.FileContractID
 
-	existing, _ := s.bus.Contracts(ctx)
+	existing, _ := s.bus.Contracts(ctx, api.ContractsOpts{})
 	for _, c := range existing {
 		contracts = append(contracts, c.ID)
 	}
