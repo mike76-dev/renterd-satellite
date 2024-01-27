@@ -36,7 +36,6 @@ type busClient interface {
 	Bucket(ctx context.Context, bucketName string) (resp api.Bucket, err error)
 	Contract(ctx context.Context, id types.FileContractID) (api.ContractMetadata, error)
 	Contracts(ctx context.Context, opts api.ContractsOpts) (contracts []api.ContractMetadata, err error)
-	ContractSetContracts(ctx context.Context, set string) (contracts []api.ContractMetadata, err error)
 	CreateBucket(ctx context.Context, bucketName string, opts api.CreateBucketOptions) error
 	DeleteObject(ctx context.Context, bucket, path string, opts api.DeleteObjectOptions) error
 	GougingParams(ctx context.Context) (api.GougingParams, error)

@@ -1135,7 +1135,7 @@ func (s *Satellite) requestMetadataHandler(jc jape.Context) {
 		return
 	}
 
-	contracts, err := s.bus.ContractSetContracts(ctx, set)
+	contracts, err := s.bus.Contracts(ctx, api.ContractsOpts{ContractSet: set})
 	if jc.Check("couldn't fetch contracts from bus", err) != nil {
 		return
 	}
@@ -1338,7 +1338,7 @@ func (s *Satellite) requestSlabsHandler(jc jape.Context) {
 		return
 	}
 
-	contracts, err := s.bus.ContractSetContracts(ctx, set)
+	contracts, err := s.bus.Contracts(ctx, api.ContractsOpts{ContractSet: set})
 	if jc.Check("couldn't fetch contracts from bus", err) != nil {
 		return
 	}
