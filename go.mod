@@ -4,12 +4,12 @@ go 1.20
 
 require (
 	github.com/gabriel-vasile/mimetype v1.4.3
-	go.sia.tech/core v0.1.12-0.20231211182757-77190f04f90b
+	go.sia.tech/core v0.2.2
 	go.sia.tech/jape v0.11.1
 	go.sia.tech/renterd v1.0.2
 	go.sia.tech/siad v1.5.10-0.20230228235644-3059c0b930ca
 	go.uber.org/zap v1.26.0
-	golang.org/x/crypto v0.16.0
+	golang.org/x/crypto v0.21.0
 )
 
 require (
@@ -35,8 +35,8 @@ require (
 	gitlab.com/NebulousLabs/threadgroup v0.0.0-20200608151952-38921fbef213 // indirect
 	go.sia.tech/mux v1.2.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/net v0.19.0 // indirect
-	golang.org/x/sys v0.15.0 // indirect
+	golang.org/x/net v0.21.0 // indirect
+	golang.org/x/sys v0.18.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
 	golang.org/x/tools v0.16.1 // indirect
 	gorm.io/gorm v1.25.5 // indirect
