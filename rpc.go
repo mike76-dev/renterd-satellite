@@ -212,7 +212,6 @@ func (s *Satellite) formContractsHandler(jc jape.Context) {
 		MaxUploadPrice:       gp.GougingSettings.MaxUploadPrice,
 		MaxStoragePrice:      gp.GougingSettings.MaxStoragePrice,
 		MaxSectorAccessPrice: gp.GougingSettings.MaxRPCPrice.Mul64(10),
-		MinMaxCollateral:     gp.GougingSettings.MinMaxCollateral,
 		BlockHeightLeeway:    uint64(gp.GougingSettings.HostBlockHeightLeeway),
 
 		UploadPacking: ups.Enabled,
@@ -325,7 +324,6 @@ func (s *Satellite) renewContractsHandler(jc jape.Context) {
 		MaxUploadPrice:       gp.GougingSettings.MaxUploadPrice,
 		MaxStoragePrice:      gp.GougingSettings.MaxStoragePrice,
 		MaxSectorAccessPrice: gp.GougingSettings.MaxRPCPrice.Mul64(10),
-		MinMaxCollateral:     gp.GougingSettings.MinMaxCollateral,
 		BlockHeightLeeway:    uint64(gp.GougingSettings.HostBlockHeightLeeway),
 
 		UploadPacking: ups.Enabled,
@@ -749,7 +747,6 @@ func (s *Satellite) settingsHandlerPOST(jc jape.Context) {
 		MaxUploadPrice:       gp.GougingSettings.MaxUploadPrice,
 		MaxStoragePrice:      gp.GougingSettings.MaxStoragePrice,
 		MaxSectorAccessPrice: gp.GougingSettings.MaxRPCPrice.Mul64(10),
-		MinMaxCollateral:     gp.GougingSettings.MinMaxCollateral,
 		BlockHeightLeeway:    uint64(gp.GougingSettings.HostBlockHeightLeeway),
 
 		UploadPacking: ups.Enabled,
